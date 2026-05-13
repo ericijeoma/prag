@@ -6,15 +6,32 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
+		"build": "wrangler deploy --dry-run",
+		"lint": "eslint .",
 		"test": "vitest",
-		"cf-typegen": "wrangler types"
+		"cf-typegen": "wrangler types",
+		"audit:security": "snyk test",
+		"audit:health": "fallow audit",
+		"audit:deps": "depcruise src --config .dependency-cruiser.js"
 	},
+	"type": "module",
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.12.4",
+		"@cloudflare/workers-types": "^4.20260511.1",
+		"@eslint/js": "^10.0.1",
 		"dependency-cruiser": "^17.4.0",
+		"dotenv": "^17.4.2",
+		"eslint": "^10.3.0",
+		"eslint-plugin-boundaries": "^6.0.2",
 		"fallow": "^2.69.0",
+		"supabase": "^2.98.2",
 		"typescript": "^5.5.2",
+		"typescript-eslint": "^8.59.3",
 		"vitest": "~3.2.0",
 		"wrangler": "^4.90.0"
+	},
+	"dependencies": {
+		"@supabase/supabase-js": "^2.105.4",
+		"groq-sdk": "^1.2.0"
 	}
 }

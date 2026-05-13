@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "unused-dependencies": "error",
+    "unused-dev-dependencies": "warn",
+    "duplicate-exports": "error",
+    "unresolved-imports": "error",
+    "unlisted-dependencies": "error",
+    "circular-dependencies": "error",
+    "boundary-violation": "error",
+    "stale-suppressions": "warn"
+  }
+}

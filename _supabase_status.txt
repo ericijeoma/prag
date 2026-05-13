@@ -1,0 +1,10 @@
+﻿supabase.exe : failed to inspect container health: Error response from daemon: No such container: 
+supabase_db_prag
+At C:\Users\Eric Ijeoma\AppData\Local\pnpm\bin\supabase.ps1:14 char:3
++   & "$basedir/../global/v11/267c-19e1e42d861/node_modules/supabase/bi ...
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (failed to inspe...upabase_db_prag:String) [], RemoteExcept 
+   ion
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Try rerunning the command with --debug to troubleshoot the error.
