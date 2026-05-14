@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 import { TENANT_ID } from '../../shared/config/constants.js'
+import { AppError } from '../../shared/http/errors.js'
 
 export type DocumentInsert = {
   id?: string
@@ -41,76 +42,80 @@ export class ChunkRepository {
   constructor(private readonly supabase: SupabaseClient) {}
 
   async insertDocument(input: DocumentInsert): Promise<{ id: string }> {
-    const payload = {
-      ...input,
-      tenant_id: TENANT_ID,
-      metadata: input.metadata ?? {},
-      source_type: input.source_type ?? 'upload',
+    // RPC wrappers live in the `public` schema to avoid PostgREST multi-schema issues.
+    const { data, error } = await this.supabase.schema('public').rpc('prag_insert_document', {
+      p_tenant_id: TENANT_ID,
+      p_title: input.title,
+      p_content: input.content,
+      p_metadata: input.metadata ?? {},
+      p_file_path: input.file_path ?? null,
+      p_source_type: input.source_type ?? 'upload',
+    })
+
+    if (error) {
+      throw new AppError('Failed to insert document', {
+        code: 'supabase_error',
+        status: 500,
+        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+      })
     }
 
-    const { data, error } = await this.supabase
-      .schema('knowledge')
-      .from('documents')
-      .insert(payload)
-      .select('id')
-      .single()
-
-    if (error) throw new Error(`Failed to insert document: ${error.message}`)
-    return { id: data.id as string }
+    return { id: String(data) }
   }
 
   async insertChunk(input: ChunkInsert): Promise<{ id: string }> {
-    const payload = {
-      ...input,
-      tenant_id: TENANT_ID,
-      chunk_metadata: input.chunk_metadata ?? {},
+    const { data, error } = await this.supabase.schema('public').rpc('prag_insert_chunk', {
+      p_tenant_id: TENANT_ID,
+      p_document_id: input.document_id,
+      p_chunk_index: input.chunk_index,
+      p_chunk_text: input.chunk_text,
+      p_chunk_metadata: input.chunk_metadata ?? {},
+    })
+
+    if (error) {
+      throw new AppError('Failed to insert chunk', {
+        code: 'supabase_error',
+        status: 500,
+        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+      })
     }
 
-    const { data, error } = await this.supabase
-      .schema('knowledge')
-      .from('chunks')
-      .insert(payload)
-      .select('id')
-      .single()
-
-    if (error) throw new Error(`Failed to insert chunk: ${error.message}`)
-    return { id: data.id as string }
+    return { id: String(data) }
   }
 
   async insertChunkVector(input: ChunkVectorInsert): Promise<{ id: string }> {
-    if (!Array.isArray(input.embedding)) throw new Error('embedding must be a number[]')
+    if (!Array.isArray(input.embedding)) {
+      throw new AppError('embedding must be a number[]', { code: 'bad_request', status: 400 })
+    }
     if (input.embedding.length !== 384) {
-      throw new Error(`embedding must be 384-dim; got ${input.embedding.length}`)
+      throw new AppError(`embedding must be 384-dim; got ${input.embedding.length}`, {
+        code: 'bad_request',
+        status: 400,
+      })
     }
 
-    const payload = {
-      ...input,
-      tenant_id: TENANT_ID,
+    const { data, error } = await this.supabase.schema('public').rpc('prag_insert_chunk_vector', {
+      p_tenant_id: TENANT_ID,
+      p_chunk_id: input.chunk_id,
+      // supabase-js will serialize number[]; PostgREST coerces to vector(384)
+      p_embedding: input.embedding,
+    })
+
+    if (error) {
+      throw new AppError('Failed to insert chunk vector', {
+        code: 'supabase_error',
+        status: 500,
+        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+      })
     }
 
-    const { data, error } = await this.supabase
-      .schema('knowledge')
-      .from('chunk_vectors')
-      .insert(payload)
-      .select('id')
-      .single()
-
-    if (error) throw new Error(`Failed to insert chunk vector: ${error.message}`)
-    return { id: data.id as string }
+    return { id: String(data) }
   }
 
   /**
    * Similarity search using pgvector.
-   *
-   * Notes:
-   * - We don't have an RPC in migrations; so we use a SQL query via the PostgREST
-   *   query endpoint is not available in supabase-js.
-   * - Therefore we perform similarity using an RPC-like SQL function created on the fly
-   *   would be wrong. Instead, we approximate with an `order` on an exposed computed column
-   *   is not possible either.
-   *
-   * So: we rely on a Supabase SQL function `knowledge.match_chunks` if it exists.
-   * If it doesn't exist in your DB, add it in a follow-up migration.
+   * Uses public.prag_match_chunks RPC wrapper which internally calls knowledge.match_chunks.
+   * 
    */
   async similaritySearch(input: {
     embedding: number[]
@@ -118,19 +123,24 @@ export class ChunkRepository {
   }): Promise<SimilarChunk[]> {
     const topK = input.topK ?? 5
     if (input.embedding.length !== 384) {
-      throw new Error(`embedding must be 384-dim; got ${input.embedding.length}`)
+      throw new AppError(`embedding must be 384-dim; got ${input.embedding.length}`, {
+        code: 'bad_request',
+        status: 400,
+      })
     }
 
-    const { data, error } = await this.supabase.rpc('match_chunks', {
+    const { data, error } = await this.supabase.schema('public').rpc('prag_match_chunks', {
       p_tenant_id: TENANT_ID,
       p_query_embedding: input.embedding,
       p_match_count: topK,
     })
 
     if (error) {
-      throw new Error(
-        `Similarity search failed (expected RPC knowledge.match_chunks): ${error.message}`,
-      )
+      throw new AppError('Similarity search failed', {
+        code: 'supabase_error',
+        status: 500,
+        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+      })
     }
 
     return (data as Record<string, unknown>[]).map((row) => ({

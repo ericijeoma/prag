@@ -9,7 +9,10 @@ export default defineConfig([
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.ts", "assets/**/*.ts", "assets/**/*.tsx"],
+    files: ["src/**/*.ts", "assets/**/*.ts", "assets/**/*.tsx", "**/*.cjs"],
+     languageOptions: {
+      sourceType: "commonjs",
+    },
     rules: {
       "@typescript-eslint/no-unused-vars": [
         "error",

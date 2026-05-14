@@ -1,6 +1,7 @@
 {
 	"name": "prag",
 	"main": "src/index.ts",
+	"workers_dev": true,
 	"compatibility_date": "2026-05-12",
 	"compatibility_flags": ["nodejs_compat"],
 	// Cloudflare Workers AI binding (used for embeddings)
@@ -9,7 +10,7 @@
 	},
 	// Non-secret configuration.
 	"vars": {
-		"SUPABASE_URL": ""
+		"SUPABASE_URL": "https://kmxqusvtysoocmgqfmjl.supabase.co"
 	},
 	"observability": {
 		"enabled": true

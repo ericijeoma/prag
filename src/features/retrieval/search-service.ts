@@ -1,65 +1,68 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { ChunkRepository, type SimilarChunk } from '../../infrastructure/supabase/chunk-repository.js'
-
-export type AiEmbeddingResponse = {
-  data?: number[][] | number[]
-  embedding?: number[]
-  result?: number[]
-}
-
-export type AiBinding = {
-  run(model: string, inputs: string | { text: string }): Promise<AiEmbeddingResponse>
-}
+import { ChunkRepository, type SimilarChunk } from '../../infrastructure/supabase/chunk-repository.js';
+import type { RetrievalPort } from '../../shared/contracts/retrieval.js';
+import { AppError } from '../../shared/http/errors.js';
+import type { AiBinding } from '../../shared/types/ai';
 
 export type SearchEnv = {
-  AI: AiBinding
-}
+	AI: AiBinding;
+};
 
 export type SearchRequest = {
-  query: string
-  topK?: number
-}
+	query: string;
+	topK?: number;
+};
 
 export type SearchResult = {
-  query: string
-  results: SimilarChunk[]
-}
+	query: string;
+	results: SimilarChunk[];
+};
 
-const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5'
+const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
 
 export class SearchService {
-  private readonly repo: ChunkRepository
+	private readonly repo: ChunkRepository;
 
-  constructor(
-    private readonly deps: {
-      supabase: SupabaseClient
-      env: SearchEnv
-    },
-  ) {
-    this.repo = new ChunkRepository(deps.supabase)
-  }
+	constructor(
+		private readonly deps: {
+			supabase: SupabaseClient;
+			env: SearchEnv;
+		},
+	) {
+		this.repo = new ChunkRepository(deps.supabase);
+	}
 
-  async search(input: SearchRequest): Promise<SearchResult> {
-    if (!input.query?.trim()) throw new Error('query is required')
-    const topK = input.topK ?? 5
+	async search(input: SearchRequest): Promise<SearchResult> {
+		if (!input.query?.trim()) {
+			throw new AppError('query is required', { code: 'bad_request', status: 400 });
+		}
+		const topK = input.topK ?? 5;
 
-    const embedding = await this.embed(input.query)
-    const results = await this.repo.similaritySearch({ embedding, topK })
-    return { query: input.query, results }
-  }
+		const embedding = await this.embed(input.query);
+		const results = await this.repo.similaritySearch({ embedding, topK });
+		return { query: input.query, results };
+	}
 
-  private async embed(text: string): Promise<number[]> {
-    const result = await this.deps.env.AI.run(EMBEDDING_MODEL, { text })
-    const vector =
-      (result?.data?.[0] as number[] | undefined) ??
-      (result?.data as number[] | undefined) ??
-      (result?.embedding as number[] | undefined) ??
-      (result?.result as number[] | undefined)
+	private async embed(text: string): Promise<number[]> {
+		const result = await this.deps.env.AI.run(EMBEDDING_MODEL, { text });
+		const vector =
+			(result?.data?.[0] as number[] | undefined) ??
+			(result?.data as number[] | undefined) ??
+			(result?.embedding as number[] | undefined) ??
+			(result?.result as number[] | undefined);
 
-    if (!vector || !Array.isArray(vector)) {
-      throw new Error('Workers AI embedding returned an unexpected shape')
-    }
-    return vector
-  }
+		if (!vector || !Array.isArray(vector)) {
+			throw new AppError('Workers AI embedding returned an unexpected shape', {
+				code: 'internal_error',
+				status: 500,
+				details: { resultShape: Object.keys(result ?? {}) },
+			});
+		}
+		return vector;
+	}
 }
+
+// This class satisfies the shared RetrievalPort contract.
+// (The agent feature depends on the interface only, not this implementation.)
+void (0 as unknown as SearchService satisfies RetrievalPort);

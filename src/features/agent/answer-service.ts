@@ -1,9 +1,8 @@
-import Groq from 'groq-sdk'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { getGroqClient } from '../../shared/llm/groq-client.js'
+import type { RetrievalPort } from '../../shared/contracts/retrieval.js'
+import { AppError } from '../../shared/http/errors.js'
 
-import { SearchService, type SearchEnv } from '../retrieval/search-service.js'
-
-export type AnswerEnv = SearchEnv & {
+export type AnswerEnv = {
   GROQ_API_KEY: string
 }
 
@@ -49,23 +48,30 @@ function buildPrompt(query: string, citations: Citation[]): string {
 }
 
 export class AnswerService {
-  private readonly search: SearchService
-  private readonly groq: Groq
+  private readonly retrieval: RetrievalPort
+  private readonly groq: ReturnType<typeof getGroqClient>
 
   constructor(
     private readonly deps: {
-      supabase: SupabaseClient
+      retrieval: RetrievalPort
       env: AnswerEnv
     },
   ) {
-    this.search = new SearchService({ supabase: deps.supabase, env: deps.env })
-    this.groq = new Groq({ apiKey: deps.env.GROQ_API_KEY })
+    this.retrieval = deps.retrieval
+
+    // Bridge Worker bindings (env) into the shared Groq adapter (global/process).
+    // This keeps feature code provider-agnostic while preserving current runtime behavior.
+    ;(globalThis as Record<string, unknown>).GROQ_API_KEY ??= deps.env.GROQ_API_KEY
+
+    this.groq = getGroqClient()
   }
 
   async answer(input: AnswerRequest): Promise<AnswerResult> {
-    if (!input.query?.trim()) throw new Error('query is required')
+    if (!input.query?.trim()) {
+      throw new AppError('query is required', { code: 'bad_request', status: 400 })
+    }
 
-    const search = await this.search.search({ query: input.query, topK: 5 })
+    const search = await this.retrieval.search({ query: input.query, topK: 5 })
     const citations: Citation[] = search.results.map((r) => ({
       document_id: r.document_id,
       chunk_id: r.chunk_id,
