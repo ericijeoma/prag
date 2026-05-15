@@ -1,108 +1,99 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-
 import { ChunkRepository } from '../../infrastructure/supabase/chunk-repository.js';
 import { RecursiveChunker } from '../../shared/chunking/recursive-chunker.js';
 import { AppError } from '../../shared/http/errors.js';
 import type { AiBinding } from '../../shared/types/ai';
 
-export type IngestEnv = {
-	AI: AiBinding;
-};
-
+export type IngestEnv = { AI: AiBinding };
 export type IngestRequest = {
-	title: string;
-	content: string;
-	metadata?: Record<string, unknown>;
-	file_path?: string | null;
-	source_type?: string;
+  title: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+  file_path?: string | null;
+  source_type?: string;
+  trace_id?: string;
 };
-
-export type IngestResult = {
-	documentId: string;
-	chunksInserted: number;
-};
+export type IngestResult = { documentId: string; chunksInserted: number; traceId: string };
 
 const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
 
 export class IngestService {
-	private readonly repo: ChunkRepository;
-	private readonly chunker: RecursiveChunker;
+  private readonly repo: ChunkRepository;
+  private readonly chunker: RecursiveChunker;
 
-	constructor(
-		private readonly deps: {
-			supabase: SupabaseClient;
-			env: IngestEnv;
-		},
-	) {
-		this.repo = new ChunkRepository(deps.supabase);
-		this.chunker = new RecursiveChunker({ minTokens: 300, maxTokens: 800, overlapTokens: 100 });
-	}
+  constructor(private readonly deps: { supabase: SupabaseClient; env: IngestEnv }) {
+    this.repo = new ChunkRepository(deps.supabase);
+    this.chunker = new RecursiveChunker({ minTokens: 300, maxTokens: 800, overlapTokens: 100 });
+  }
 
-	async ingest(input: IngestRequest): Promise<IngestResult> {
-		if (!input.title?.trim()) {
-			throw new AppError('title is required', { code: 'bad_request', status: 400 });
-		}
-		if (!input.content?.trim()) {
-			throw new AppError('content is required', { code: 'bad_request', status: 400 });
-		}
+  async ingest(input: IngestRequest): Promise<IngestResult> {
+    if (!input.title?.trim() || !input.content?.trim()) {
+      throw new AppError('title and content are required', { code: 'bad_request', status: 400 });
+    }
 
-		const { id: documentId } = await this.repo.insertDocument({
-			title: input.title,
-			content: this.normalizeText(input.content),
-			metadata: input.metadata ?? {},
-			file_path: input.file_path ?? null,
-			source_type: input.source_type ?? 'upload',
-		});
+    const traceId = input.trace_id ?? `trace_${Date.now()}`;
+    await this.repo.logTrace({ traceId, stage: 'ingest.start', payload: { title: input.title } });
 
-		const chunks = this.chunker.chunk(input.content);
-		let inserted = 0;
+    // 1. Insert Document
+    const { id: documentId } = await this.repo.insertDocument({
+      title: input.title,
+      content: this.normalizeText(input.content),
+      metadata: { ...(input.metadata ?? {}), traceId },
+      file_path: input.file_path ?? null,
+      source_type: input.source_type ?? 'upload',
+    });
 
-		for (const chunk of chunks) {
-			const { id: chunkId } = await this.repo.insertChunk({
-				document_id: documentId,
-				chunk_index: chunk.index,
-				chunk_text: chunk.text,
-				chunk_metadata: {
-					...(input.metadata ?? {}),
-					startChar: chunk.startChar,
-					endChar: chunk.endChar,
-				},
-			});
+    const chunks = this.chunker.chunk(input.content);
 
-			const embedding = await this.embedText(chunk.text);
-			await this.repo.insertChunkVector({ chunk_id: chunkId, embedding });
-			inserted++;
-		}
+    // 2. Batch Chunk Text Insertion (1 Subrequest)
+    const insertedChunks = await this.repo.batchInsertChunks(
+      chunks.map((c) => ({
+        document_id: documentId,
+        chunk_index: c.index,
+        chunk_text: c.text,
+        chunk_metadata: { ...(input.metadata ?? {}), traceId, startChar: c.startChar, endChar: c.endChar },
+      }))
+    );
 
-		return { documentId, chunksInserted: inserted };
-	}
+    // 3. Batch Embedding Call (1 Subrequest)
+    const aiResult = await this.deps.env.AI.run(
+      EMBEDDING_MODEL,
+      { text: chunks.map((c) => c.text) } as unknown as { text: string }
+    );
 
-	private async embedText(text: string): Promise<number[]> {
-		const result = await this.deps.env.AI.run(EMBEDDING_MODEL, { text });
+    const embeddings = this.extractBatchEmbeddings(aiResult);
+    if (embeddings.length !== insertedChunks.length) {
+      throw new AppError('Mismatched embedding count', { code: 'internal_error', status: 500 });
+    }
 
-		// Workers AI embedding responses vary by runtime version. Normalize.
-		const vector =
-			(result?.data?.[0] as number[] | undefined) ??
-			(result?.data as number[] | undefined) ??
-			(result?.embedding as number[] | undefined) ??
-			(result?.result as number[] | undefined);
+    // 4. Batch Vector Insertion (1 Subrequest)
+    await this.repo.batchInsertVectors(
+      insertedChunks.map((ic, i) => ({
+        chunk_id: ic.id,
+        embedding: embeddings[i],
+      }))
+    );
 
-		if (!vector || !Array.isArray(vector)) {
-			throw new AppError('Workers AI embedding returned an unexpected shape', {
-				code: 'internal_error',
-				status: 500,
-				details: { resultShape: Object.keys(result ?? {}) },
-			});
-		}
-		return vector;
-	}
+    await this.repo.logTrace({ traceId, stage: 'ingest.finish', payload: { chunksInserted: chunks.length } });
 
-	private normalizeText(text: string): string {
-		return text
-			.replace(/[ \t]+/g, ' ')     // Collapse multiple spaces
-			.replace(/\n{3,}/g, '\n\n')  // Max two consecutive newlines
-			.replace(/•/g, '\n• ')       // Ensure bullets start on new lines
-			.trim();
-	}
+    return { documentId, chunksInserted: chunks.length, traceId };
+  }
+
+  private extractBatchEmbeddings(result: unknown): number[][] {
+    const res = result as Record<string, unknown>;
+    const data = (res?.data || res?.result || res) as unknown;
+    
+    if (Array.isArray(data) && Array.isArray(data[0]) && typeof data[0][0] === 'number') {
+      return data as number[][];
+    }
+    
+    throw new AppError('Invalid embedding response shape', { 
+      code: 'internal_error', 
+      status: 500 
+    });
+  }
+
+  private normalizeText(text: string): string {
+    return text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').replace(/•/g, '\n• ').trim();
+  }
 }
-
