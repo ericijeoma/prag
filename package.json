@@ -33,6 +33,7 @@
 	},
 	"dependencies": {
 		"@supabase/supabase-js": "^2.105.4",
-		"groq-sdk": "^1.2.0"
+		"groq-sdk": "^1.2.0",
+		"unpdf": "^0.12.0"
 	}
 }

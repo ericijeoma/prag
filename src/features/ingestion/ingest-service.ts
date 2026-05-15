@@ -48,7 +48,7 @@ export class IngestService {
 
 		const { id: documentId } = await this.repo.insertDocument({
 			title: input.title,
-			content: input.content,
+			content: this.normalizeText(input.content),
 			metadata: input.metadata ?? {},
 			file_path: input.file_path ?? null,
 			source_type: input.source_type ?? 'upload',
@@ -96,4 +96,13 @@ export class IngestService {
 		}
 		return vector;
 	}
+
+	private normalizeText(text: string): string {
+		return text
+			.replace(/[ \t]+/g, ' ')     // Collapse multiple spaces
+			.replace(/\n{3,}/g, '\n\n')  // Max two consecutive newlines
+			.replace(/•/g, '\n• ')       // Ensure bullets start on new lines
+			.trim();
+	}
 }
+

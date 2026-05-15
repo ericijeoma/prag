@@ -2,7 +2,7 @@ import { createSupabaseClient, type SupabaseEnv } from '../infrastructure/supaba
 import { IngestService } from '../features/ingestion/ingest-service.js'
 import { SearchService } from '../features/retrieval/search-service.js'
 import { AnswerService } from '../features/agent/answer-service.js'
-import type { AiBinding } from '../shared/types/ai.js'
+import type { AiBinding } from '../features/ingestion/ingest-service.js'
 import { buildHealthReport } from './health.js'
 import { AppError, isAppError } from '../shared/http/errors.js'
 
@@ -91,77 +91,23 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
   if (path === '/ingest') {
     if (method !== 'POST') return methodNotAllowed()
     try {
-      const contentType = request.headers.get('content-type') ?? ''
+      const body = await readJson<{
+        title?: string
+        content?: string
+        metadata?: Record<string, unknown>
+        file_path?: string | null
+        source_type?: string
+      }>(request)
 
-      let title: string
-      let content: string
-      let metadata: Record<string, unknown> = {}
-      let file_path: string | null = null
-      let source_type = 'upload'
-
-      if (contentType.includes('multipart/form-data')) {
-        const formData = await request.formData()
-        // Cloudflare Workers' FormData typings sometimes omit File in FormDataEntryValue.
-        // Cast to the runtime shape we expect so we can safely access `name` after narrowing.
-        const file = formData.get('file') as unknown as File | string | null
-
-        if (!file || typeof file === 'string') {
-          return badRequest('file field is required for multipart upload')
-        }
-
-        source_type = file.name.endsWith('.pdf')? 'pdf': 'text'
-        if (source_type == 'pdf'){
-
-          // Extract text from PDF using unpdf
-          const { extractText } = await import('unpdf')
-          const buffer = await file.arrayBuffer()
-          const { text } = await extractText(new Uint8Array(buffer), {
-            mergePages: true,
-          })
-          content = text
-        }
-        else{
-          content = await file.text()
-        }
-
-        title = (formData.get('title') as string | null) ?? file.name
-        file_path = file.name
-
-        const metaRaw = formData.get('metadata')
-        if (metaRaw && typeof metaRaw === 'string') {
-          try {
-            metadata = JSON.parse(metaRaw)
-          } catch {
-            /* ignore */
-          }
-        }
-      } else {
-        const body = await readJson<{
-          title?: string
-          content?: string
-          metadata?: Record<string, unknown>
-          file_path?: string | null
-          source_type?: string
-        }>(request)
-
-        if (!body.title || !body.content) {
-          return badRequest('title and content are required')
-        }
-
-        title = body.title
-        content = body.content
-        metadata = body.metadata ?? {}
-        file_path = body.file_path ?? null
-        source_type = body.source_type ?? 'upload'
-      }
+      if (!body.title || !body.content) return badRequest('title and content are required')
 
       const svc = new IngestService({ supabase: supabase!, env })
       const result = await svc.ingest({
-        title,
-        content,
-        metadata,
-        file_path,
-        source_type,
+        title: body.title,
+        content: body.content,
+        metadata: body.metadata,
+        file_path: body.file_path ?? null,
+        source_type: body.source_type,
       })
 
       return json({ ok: true, result })
@@ -190,8 +136,7 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
       const body = await readJson<{ query?: string }>(request)
       if (!body.query) return badRequest('query is required')
 
-      const searchSvc = new SearchService({ supabase: supabase!, env })
-      const svc = new AnswerService({ retrieval: searchSvc, env })
+      const svc = new AnswerService({ supabase: supabase!, env })
       const result = await svc.answer({ query: body.query })
       return json({ ok: true, result })
     } catch (err) {
@@ -201,4 +146,3 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
 
   return json({ ok: false, error: { code: 'bad_request', message: 'Not found' } }, { status: 404 })
 }
-

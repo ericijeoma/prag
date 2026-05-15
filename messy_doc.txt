@@ -1,0 +1,10 @@
+﻿Title: Messy 🚀 Document
+
+• First point
+• Second point
+
+This   has     too    many spaces and
+
+
+
+too many newlines.

@@ -12,7 +12,6 @@ export type AnswerRequest = {
 
 export type Citation = {
   document_id: string
-  document_title: string
   chunk_id: string
   chunk_index: number
   text: string
@@ -30,20 +29,18 @@ function buildPrompt(query: string, citations: Citation[]): string {
   const context = citations
     .map(
       (c, idx) =>
-        `[#${idx + 1}] source="${c.document_title}"\nchunk_index=${c.chunk_index}\n${c.text}`,
+        `[#${idx + 1}] document_id=${c.document_id} chunk_id=${c.chunk_id} chunk_index=${c.chunk_index}\n${c.text}`,
     )
     .join('\n\n')
 
   return [
-    'You are PRAG, a precise production RAG agent.',
-    'Answer strictly from the provided context.',
-    'If the answer is present in the context, extract it directly and do not refuse.',
-    'Only say you need more information if the context truly lacks the answer.',
-    'Use short bullet points when the answer is a list.',
-    'Citations must be added at the end of relevant sentences like [#1].',
+    'You are PRAG, a production RAG agent.',
+    'Answer the user question using ONLY the provided context.',
+    'If the context is insufficient, say you do not know.',
+    'When you use a fact from the context, add citations like [#1] at the end of the sentence.',
     '',
     'Context:',
-    context || '(No context found)',
+    context || '(no context)',
     '',
     `Question: ${query}`,
     'Answer:',
@@ -77,10 +74,9 @@ export class AnswerService {
     const search = await this.retrieval.search({ query: input.query, topK: 5 })
     const citations: Citation[] = search.results.map((r) => ({
       document_id: r.document_id,
-      document_title: r.document_title ?? 'Unknown Document',
       chunk_id: r.chunk_id,
       chunk_index: r.chunk_index,
-      text: r.chunk_text.length > 800 ? `${r.chunk_text.slice(0, 800)}...` : r.chunk_text,
+      text: r.chunk_text,
       score: r.score,
     }))
 

@@ -38,9 +38,26 @@ export class SearchService {
 			throw new AppError('query is required', { code: 'bad_request', status: 400 });
 		}
 		const topK = input.topK ?? 5;
+		const fetchK = Math.max(topK * 2, 10);
 
 		const embedding = await this.embed(input.query);
-		const results = await this.repo.similaritySearch({ embedding, topK });
+		const rawResults = await this.repo.similaritySearch({
+			embedding,
+			topK: fetchK,
+		});
+
+		// Fix #1: Deduplicate (Document ID + Index)
+		// Fix #5: Apply Score Threshold
+		const uniqueMap = new Map<string, SimilarChunk>();
+		for (const chunk of rawResults) {
+			// Dedup by the actual content (first 100 chars is enough) instead of document ID.
+			const key = chunk.chunk_text.slice(0, 100);
+			if (!uniqueMap.has(key) && chunk.score > 0.55) {
+				uniqueMap.set(key, chunk);
+			}
+		}
+
+		const results = Array.from(uniqueMap.values()).slice(0, topK);
 		return { query: input.query, results };
 	}
 

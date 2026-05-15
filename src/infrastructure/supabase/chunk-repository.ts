@@ -29,9 +29,11 @@ export type ChunkVectorInsert = {
 export type SimilarChunk = {
   chunk_id: string
   document_id: string
+  document_title: string
   chunk_index: number
   chunk_text: string
   chunk_metadata: Record<string, unknown>
+  parent_chunk_id?: string | null
   score: number
 }
 
@@ -146,10 +148,12 @@ export class ChunkRepository {
     return (data as Record<string, unknown>[]).map((row) => ({
       chunk_id: String(row.chunk_id),
       document_id: String(row.document_id),
+      document_title: String(row.document_title ?? 'Unknown Document'),
       chunk_index: Number(row.chunk_index),
       chunk_text: String(row.chunk_text),
-      chunk_metadata: (row.chunk_metadata ?? {}) as Record<string, unknown>,
-      score: Number(row.score ?? row.similarity ?? row.distance ?? 0),
+      chunk_metadata: (row.chunk_metadata as Record<string, unknown>) ?? {},
+      parent_chunk_id: row.parent_chunk_id ? String(row.parent_chunk_id) : null,
+      score: Number(row.score),
     }))
   }
 }

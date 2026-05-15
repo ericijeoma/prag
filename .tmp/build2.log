@@ -1,0 +1,10 @@
+
+ ⛅️ wrangler 4.90.0
+───────────────────
+Total Upload: 3152.05 KiB / gzip: 719.22 KiB
+Your Worker has access to the following bindings:
+Binding                                                            Resource                  
+env.AI                                                             AI                        
+env.SUPABASE_URL ("https://kmxqusvtysoocmgqfmjl.supabase...")      Environment Variable      
+
+--dry-run: exiting now.

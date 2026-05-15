@@ -1,0 +1,13 @@
+package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+src/app/routes.ts
+src/features/agent/answer-service.ts
+src/features/ingestion/ingest-service.ts
+src/features/retrieval/search-service.ts
+src/infrastructure/supabase/chunk-repository.ts
+src/shared/chunking/recursive-chunker.ts
+src/shared/contracts/retrieval.ts
+src/shared/supabase/types.ts
+supabase/migrations/0001_initial_schema.sql
+test/chunking/recursive-chunker.test.ts

@@ -1,0 +1,19 @@
+ M package.json
+ M pnpm-lock.yaml
+ M pnpm-workspace.yaml
+ M src/app/routes.ts
+ M src/features/agent/answer-service.ts
+ M src/features/ingestion/ingest-service.ts
+ M src/features/retrieval/search-service.ts
+ M src/infrastructure/supabase/chunk-repository.ts
+ M src/shared/chunking/recursive-chunker.ts
+ M src/shared/contracts/retrieval.ts
+ M src/shared/supabase/types.ts
+ M supabase/migrations/0001_initial_schema.sql
+ M test/chunking/recursive-chunker.test.ts
+?? .tmp/
+?? body.json
+?? "src - Shortcut (2).lnk"
+?? "src - Shortcut (3).lnk"
+?? "src - Shortcut.lnk"
+?? "supabase - Shortcut.lnk"

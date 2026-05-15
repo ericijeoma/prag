@@ -7,6 +7,7 @@ export interface ChunkResult {
   chunk_id: string;
   chunk_index: number;
   chunk_text: string;
+  document_title?: string
   score: number;
 }
 
