@@ -7,10 +7,18 @@ export interface ChunkResult {
   chunk_id: string;
   chunk_index: number;
   chunk_text: string;
+  parent_text?: string | null;
+  page_number?: number | null;
+  is_child?: boolean;
   document_title?: string
   score: number;
 }
 
 export interface RetrievalPort {
-  search(input: { query: string; topK?: number }): Promise<{ query: string; results: ChunkResult[] }>;
+  search(input: {
+    query: string;
+    topK?: number;
+    traceId?: string;
+    chatHistory?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  }): Promise<{ query: string; results: ChunkResult[] }>;
 }

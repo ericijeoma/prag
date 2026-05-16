@@ -3,8 +3,11 @@ import { IngestService } from '../features/ingestion/ingest-service.js'
 import { SearchService } from '../features/retrieval/search-service.js'
 import { AnswerService } from '../features/agent/answer-service.js'
 import type { AiBinding } from '../shared/types/ai.js'
+import { ChunkRepository } from '../infrastructure/supabase/chunk-repository.js'
+import { ChatService } from '../features/chat/chat-service.js'
 import { buildHealthReport } from './health.js'
 import { AppError, isAppError } from '../shared/http/errors.js'
+import { resolveSessionId, resolveTraceId } from '../shared/trace/trace-id.js'
 
 type Json = Record<string, unknown>
 
@@ -61,10 +64,19 @@ export type AppEnv = SupabaseEnv & {
   GROQ_API_KEY: string
 }
 
+type ChatRequestBody = {
+  query?: string
+  session_id?: string
+}
+
 export async function handleRequest(request: Request, env: AppEnv): Promise<Response> {
   const url = new URL(request.url)
   const path = url.pathname
   const method = request.method.toUpperCase()
+
+  // Global TraceID + session headers
+  const traceId = resolveTraceId(request.headers)
+  const sessionIdFromHeader = resolveSessionId(request.headers)
 
   let supabase: ReturnType<typeof createSupabaseClient> | undefined
   try {
@@ -162,6 +174,7 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
         metadata,
         file_path,
         source_type,
+        trace_id: traceId,
       })
 
       return json({ ok: true, result })
@@ -177,7 +190,7 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
       if (!body.query) return badRequest('query is required')
 
       const svc = new SearchService({ supabase: supabase!, env })
-      const result = await svc.search({ query: body.query, topK: 5 })
+      const result = await svc.search({ query: body.query, topK: 5, traceId })
       return json({ ok: true, result })
     } catch (err) {
       return toErrorResponse(err)
@@ -191,9 +204,43 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
       if (!body.query) return badRequest('query is required')
 
       const searchSvc = new SearchService({ supabase: supabase!, env })
-      const svc = new AnswerService({ retrieval: searchSvc, env })
-      const result = await svc.answer({ query: body.query })
+      const svc = new AnswerService({
+        retrieval: searchSvc,
+        repo: new ChunkRepository(supabase!),
+        env: { GROQ_API_KEY: env.GROQ_API_KEY, AI: env.AI },
+      })
+      const result = await svc.answer({ query: body.query, traceId })
       return json({ ok: true, result })
+    } catch (err) {
+      return toErrorResponse(err)
+    }
+  }
+
+  if (path === '/chat') {
+    if (method !== 'POST') return methodNotAllowed()
+    try {
+      const body = await readJson<ChatRequestBody>(request)
+      const query = body.query?.trim()
+      if (!query) return badRequest('query is required')
+
+      // session can come from header or body
+      const sessionId = body.session_id?.trim() || sessionIdFromHeader
+
+      const searchSvc = new SearchService({ supabase: supabase!, env })
+      const answerSvc = new AnswerService({
+        retrieval: searchSvc,
+        repo: new ChunkRepository(supabase!),
+        env: { GROQ_API_KEY: env.GROQ_API_KEY, AI: env.AI },
+      })
+
+      const chatSvc = new ChatService({
+        answer: answerSvc,
+        memory: new ChunkRepository(supabase!),
+      })
+
+      const chat = await chatSvc.chat({ query, traceId, sessionId })
+
+      return json({ ok: true, result: { ...chat.result, session_id: chat.session_id }, traceId: chat.traceId })
     } catch (err) {
       return toErrorResponse(err)
     }
@@ -201,4 +248,9 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
 
   return json({ ok: false, error: { code: 'bad_request', message: 'Not found' } }, { status: 404 })
 }
+
+
+
+
+
 

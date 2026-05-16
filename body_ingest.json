@@ -1,0 +1,5 @@
+{
+  "title": "Production RAG Architectural Blueprint",
+  "content": "SECTION 1: INTRODUCTION. Enterprise RAG systems require strict boundaries. Page 1 content. SECTION 2: ARCHITECTURE. Hierarchical chunking separates retrieval granularity from context granularity. Page 2 content. SECTION 3: REASONING ENGINE. Query transformation utilizes history to resolve conversational pronouns and hidden intents. Page 3 content.",
+  "metadata": {"source": "manual_test"}
+}

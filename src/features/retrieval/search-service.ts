@@ -4,6 +4,7 @@ import { ChunkRepository, type SimilarChunk } from '../../infrastructure/supabas
 import type { RetrievalPort } from '../../shared/contracts/retrieval.js';
 import { AppError } from '../../shared/http/errors.js';
 import type { AiBinding } from '../../shared/types/ai';
+import type { ChatTurn } from '../../shared/types/chat.js';
 
 export type SearchEnv = {
   AI: AiBinding;
@@ -12,6 +13,8 @@ export type SearchEnv = {
 export type SearchRequest = {
   query: string;
   topK?: number;
+  traceId?: string;
+  chatHistory?: ChatTurn[];
 };
 
 export type SearchResult = {
@@ -20,7 +23,10 @@ export type SearchResult = {
 };
 
 const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
+const REWRITE_MODEL = '@cf/meta/llama-3-8b-instruct';
+
 const MIN_SCORE = 0.55;
+export const RAG_V3_MIN_SCORE = 0.45;
 
 function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'number');
@@ -105,7 +111,12 @@ export class SearchService {
     const topK = input.topK ?? 5;
     const fetchK = Math.max(topK * 2, 10);
 
-    const embedding = await this.embed(input.query);
+    const rewrittenQuery = await this.rewriteQuery({
+      currentQuery: input.query,
+      chatHistory: input.chatHistory ?? [],
+    });
+
+    const embedding = await this.embed(rewrittenQuery);
     const rawResults = await this.repo.similaritySearch({
       embedding,
       topK: fetchK,
@@ -125,7 +136,81 @@ export class SearchService {
     }
 
     const results = Array.from(deduped.values()).slice(0, topK);
-    return { query: input.query, results };
+    return { query: rewrittenQuery, results };
+  }
+
+  private buildRewritePrompt(chatHistory: ChatTurn[], currentQuery: string): string {
+    const historyText = chatHistory
+      .slice(-10)
+      .map((t) => `${t.role.toUpperCase()}: ${t.content}`)
+      .join('\n');
+
+    return [
+      'You are a query rewriting component for a production RAG system.',
+      'Rewrite the user query into a standalone, unambiguous query that resolves pronouns/coreferences.',
+      'Do NOT answer the question. Do NOT add new facts.',
+      'Output ONLY the rewritten query text, no quotes, no JSON.',
+      '',
+      'Chat History (most recent last):',
+      historyText || '(empty)',
+      '',
+      `Current Query: ${currentQuery}`,
+      'Rewritten Query:',
+    ].join('\n');
+  }
+
+  private async rewriteQuery(input: { chatHistory: ChatTurn[]; currentQuery: string }): Promise<string> {
+    // If there is no history, skip rewrite for latency.
+    if (input.chatHistory.length === 0) {
+      return input.currentQuery.trim();
+    }
+
+    const prompt = this.buildRewritePrompt(input.chatHistory, input.currentQuery);
+
+    const result: unknown = await this.deps.env.AI.run(REWRITE_MODEL, {
+      messages: [
+        { role: 'system', content: 'You rewrite queries for retrieval. Return only the rewritten query.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.1,
+      max_tokens: 128,
+    });
+
+    // Workers AI chat models can return different shapes; accept common ones.
+    if (typeof result === 'string') {
+      return result.trim() || input.currentQuery.trim();
+    }
+
+    if (typeof result === 'object' && result !== null) {
+      const rec = result as Record<string, unknown>;
+
+      // common: { result: { response: "..." } }
+      if (typeof rec.result === 'object' && rec.result !== null) {
+        const inner = rec.result as Record<string, unknown>;
+        const response = inner.response;
+        if (typeof response === 'string' && response.trim()) return response.trim();
+      }
+
+      // common: { response: "..." }
+      if (typeof rec.response === 'string' && rec.response.trim()) return rec.response.trim();
+
+      // common: { choices: [ { message: { content: "..." } } ] }
+      const choices = rec.choices;
+      if (Array.isArray(choices) && choices.length > 0) {
+        const first = choices[0] as unknown;
+        if (typeof first === 'object' && first !== null) {
+          const choiceRec = first as Record<string, unknown>;
+          const message = choiceRec.message;
+          if (typeof message === 'object' && message !== null) {
+            const msgRec = message as Record<string, unknown>;
+            const content = msgRec.content;
+            if (typeof content === 'string' && content.trim()) return content.trim();
+          }
+        }
+      }
+    }
+
+    return input.currentQuery.trim();
   }
 
   private async embed(text: string): Promise<number[]> {
