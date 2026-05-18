@@ -18,10 +18,9 @@
 	"type": "module",
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.12.4",
-		"@cloudflare/workers-types": "^4.20260511.1",
+		"@cloudflare/workers-types": "^4.20260515.1",
 		"@eslint/js": "^10.0.1",
 		"dependency-cruiser": "^16.0.0",
-		"dotenv": "^17.4.2",
 		"eslint": "^10.3.0",
 		"eslint-plugin-boundaries": "^6.0.2",
 		"fallow": "^2.69.0",

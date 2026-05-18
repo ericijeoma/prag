@@ -37,7 +37,7 @@ export type AnswerResult = {
 const GROQ_MODEL = 'openai/gpt-oss-120b';
 
 const FAITHFULNESS_MODEL = '@cf/meta/llama-3-8b-instruct';
-const MIN_RETRIEVAL_SCORE_FOR_ANSWER = 0.45;
+// const MIN_RETRIEVAL_SCORE_FOR_ANSWER = 0.45;
 
 type GroqGlobal = typeof globalThis & {
 	GROQ_API_KEY?: string;
@@ -175,8 +175,10 @@ export class AnswerService {
 			citationMap: {},
 		});
 
-		const bestScore = search.results[0]?.score ?? 0;
-		if (bestScore < MIN_RETRIEVAL_SCORE_FOR_ANSWER) {
+		// const bestScore = search.results[0]?.score ?? 0;
+		const hasEvidence = search.results.length > 0;
+
+		if (!hasEvidence) {
 			const answer = "I don't have enough specific information to answer that.";
 
 			await this.repo.appendSessionMessage({
@@ -233,7 +235,17 @@ export class AnswerService {
 			content: answer,
 			queryRewrite: rewrittenQuery ?? null,
 			retrievedChunkIds: search.results.map((r) => r.chunk_id),
-			citationMap: Object.fromEntries(citations.map((c, i) => [String(i + 1), c])),
+			citationMap: Object.fromEntries(
+				citations.map((c, index) => [
+					`C${index + 1}`,
+					{
+						document_id: c.document_id,
+						document_title: c.document_title,
+						chunk_id: c.chunk_id,
+						page_number: c.page_number ?? null,
+					},
+				]),
+			),
 		});
 
 		return { answer, citations, verified, degraded: !verified };

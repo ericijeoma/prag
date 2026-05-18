@@ -1,3 +1,7 @@
+packages:
+  - '.'
+  - 'frontend'
+
 allowBuilds:
   esbuild: true
   fallow: true

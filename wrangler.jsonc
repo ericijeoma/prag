@@ -2,6 +2,7 @@
 	"name": "prag",
 	"main": "src/index.ts",
 	"workers_dev": true,
+	"minify": true,
 	"compatibility_date": "2026-05-12",
 	"compatibility_flags": ["nodejs_compat"],
 	// Cloudflare Workers AI binding (used for embeddings)
