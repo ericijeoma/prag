@@ -9,6 +9,7 @@ type ChatEnvelope = {
   ok: boolean;
   result?: AnswerResult;
   traceId?: string;
+  session_id?: string;
   error?: { code?: string; message?: string };
 };
 
@@ -45,7 +46,7 @@ export async function postChat(req: ChatRequest): Promise<ChatResponse> {
   const env = json as ChatEnvelope;
   const data = (env.result ?? {}) as Partial<AnswerResult>;
   const traceId = env.traceId ?? data.traceId ?? traceIdFromHeader;
-  const session_id = data.session_id ?? req.session_id;
+  const session_id = env.session_id ?? data.session_id ?? req.session_id;
 
   // Telemetry breadcrumb: tie client behavior to backend trace id and session id
   Sentry.addBreadcrumb({

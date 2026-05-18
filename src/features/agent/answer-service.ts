@@ -52,31 +52,35 @@ function truncateText(text: string, maxLength: number): string {
 }
 
 function buildPrompt(query: string, citations: Citation[]): string {
-	const context = citations
-		.map((c, index) => {
-			const page = typeof c.page_number === 'number' ? c.page_number : 'N/A';
-			return [`${c.source_label ?? `C${index + 1}`} | Page=${page} | Title="${c.document_title}"`].join('\n');
-		})
-		.join('\n\n---\n\n');
+  const context = citations
+    .map((c, index) => {
+      const page = typeof c.page_number === 'number' ? c.page_number : 'N/A';
+      // Append the actual text content right below the metadata header
+      return [
+        `${c.source_label ?? `C${index + 1}`} | Page=${page} | Title="${c.document_title}"`,
+        c.text
+      ].join('\n');
+    })
+    .join('\n\n---\n\n');
 
-	return [
-		'You are PRAG, a production RAG agent.',
-		'You MUST answer ONLY using the context below.',
-		'If the context does not contain the needed information, say: "I don\'t have enough specific information to answer that."',
-		'',
-		'Citation rules (mandatory):',
-		'- Use only the labels [C1], [C2], ... that are provided in the context',
-		'- Do not invent sources, page numbers, or chunk IDs',
-		'- Every factual sentence must end with one or more labels',
-		'- Use one or more citations per sentence when needed.',
-		'- Do not invent sources/pages. If page is unknown, use Page: N/A.',
-		'',
-		'Context:',
-		context || '(No context found)',
-		'',
-		`Question: ${query}`,
-		'Answer:',
-	].join('\n');
+  return [
+    'You are PRAG, a production RAG agent.',
+    'You MUST answer ONLY using the context below.',
+    'If the context does not contain the needed information, say: "I don\'t have enough specific information to answer that."',
+    '',
+    'Citation rules (mandatory):',
+    '- Use only the labels [C1], [C2], ... that are provided in the context',
+    '- Do not invent sources, page numbers, or chunk IDs',
+    '- Every factual sentence must end with one or more labels',
+    '- Use one or more citations per sentence when needed.',
+    '- Do not invent sources/pages. If page is unknown, use Page: N/A.',
+    '',
+    'Context:',
+    context || '(No context found)',
+    '',
+    `Question: ${query}`,
+    'Answer:',
+  ].join('\n');
 }
 
 function buildFaithfulnessPrompt(args: { answer: string; context: string }): string {

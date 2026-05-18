@@ -4,7 +4,8 @@ export function getOrCreateSessionId(): string {
   const existing = localStorage.getItem(SESSION_ID_KEY)?.trim();
   if (existing) return existing;
 
-  const created = `sess_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  // Use the browser's native API to generate a valid UUID v4
+  const created = crypto.randomUUID(); 
   localStorage.setItem(SESSION_ID_KEY, created);
   return created;
 }

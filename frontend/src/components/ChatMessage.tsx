@@ -1,5 +1,5 @@
 import type { AnswerResult } from '../lib/contracts';
-import { extractCitationMatches, stripCitationMarkers } from '../lib/citations';
+import { linkifyCitationMarkers } from '../lib/citations';
 import { isNoEvidence } from '../lib/no-evidence';
 import { AnswerStatusBanner, type AnswerStatus } from './AnswerStatusBanner';
 import { CitationBadges } from './CitationBadges';
@@ -27,8 +27,7 @@ export function ChatMessage({ msg }: { msg: ChatMessageModel }) {
   }
 
   const citations = msg.result.citations ?? [];
-  const matches = extractCitationMatches(msg.result.answer ?? '', citations);
-  const cleaned = stripCitationMarkers(msg.result.answer ?? '');
+  const markdown = linkifyCitationMarkers(msg.result.answer ?? '');
   const status = resolveStatus(msg.result);
 
   return (
@@ -38,14 +37,7 @@ export function ChatMessage({ msg }: { msg: ChatMessageModel }) {
           <AnswerStatusBanner status={status} />
         </div>
 
-        <MarkdownAnswer markdown={cleaned || msg.result.answer || ''} />
-
-        {/* (Optional) show detected citation markers */}
-        {matches.length > 0 ? (
-          <div className="mt-3 text-[11px] text-slate-500">
-            Inline markers: {matches.map((m) => m.chunkId.slice(0, 8)).join(', ')}
-          </div>
-        ) : null}
+        <MarkdownAnswer markdown={markdown || msg.result.answer || ''} citations={citations} />
 
         <CitationBadges citations={citations} />
 
