@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ingestFile } from '../lib/ingest';
 import { getSessionId } from '../lib/session';
 
-type UploadState = 'idle' | 'uploading' | 'success' | 'error';
+export type UploadState = 'idle' | 'uploading' | 'success' | 'error';
 
-type UploadItem = {
+export type UploadItem = {
   id: string;
   file: File;
   state: UploadState;
@@ -17,7 +17,8 @@ export function ChatComposer({
   onSend,
 }: {
   disabled?: boolean;
-  onSend: (text: string) => void | Promise<void>;
+  // UPDATE: The signature now passes the attachments array up
+  onSend: (text: string, attachments: UploadItem[]) => void | Promise<void>;
 }) {
   const [text, setText] = useState('');
   const ref = useRef<HTMLTextAreaElement | null>(null);
@@ -32,9 +33,16 @@ export function ChatComposer({
 
   async function submit() {
     const msg = text.trim();
-    if (!msg) return;
+    // Only pass along files that actually finished uploading
+    const readyUploads = uploads.filter(u => u.state === 'success');
+    
+    if (!msg && readyUploads.length === 0) return;
+    
+    // UPDATE: Clear the text AND the staging area immediately upon send
     setText('');
-    await onSend(msg);
+    setUploads([]); 
+    
+    await onSend(msg, readyUploads);
   }
 
   function makeId(prefix: string): string {
@@ -53,7 +61,6 @@ export function ChatComposer({
 
     setUploads((prev) => [...newItems, ...prev]);
 
-    // Clear input to allow selecting same file again
     if (fileRef.current) fileRef.current.value = '';
 
     const session_id = getSessionId();
@@ -114,7 +121,8 @@ export function ChatComposer({
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={disabled || text.trim().length === 0}
+          // UPDATE: Allow sending if there's no text, but files are uploaded
+          disabled={disabled || (text.trim().length === 0 && uploads.filter(u => u.state === 'success').length === 0)}
           className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Send

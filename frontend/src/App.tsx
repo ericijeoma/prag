@@ -4,14 +4,26 @@ import type { AnswerResult } from './lib/contracts';
 import { loadHistory, saveHistory, clearHistory, type HistoryTurn } from './lib/history';
 import { postChat } from './lib/api';
 import { clearSessionId, getOrCreateSessionId, syncSessionIdFromServer } from './lib/session';
-import { ChatComposer } from './components/ChatComposer';
+// 🛠️ CHANGE 1: Import UploadItem type from ChatComposer
+import { ChatComposer, type UploadItem } from './components/ChatComposer';
 import { ChatMessage, type ChatMessageModel } from './components/ChatMessage';
 import { SidebarHistory } from './components/SidebarHistory';
 import { TopBar } from './components/TopBar';
 
+
+type StoredTurn = HistoryTurn & { attachments?: { id: string; name: string }[] };
+
+// 🛠️ CHANGE 2: Extend history transformer to retain attachments mapping across refreshes
 function toHistoryTurn(msg: ChatMessageModel): HistoryTurn {
   if (msg.role === 'user') {
-    return { id: msg.id, role: 'user', content: msg.content, createdAt: msg.createdAt };
+    return { 
+      id: msg.id, 
+      role: 'user', 
+      content: msg.content, 
+      createdAt: msg.createdAt,
+      // Pass the attachments along to local storage serialization securely
+      ...(msg.attachments ? { attachments: msg.attachments } : {})
+    } as StoredTurn;
   }
   return {
     id: msg.id,
@@ -30,9 +42,10 @@ export default function App() {
     // hydrate from local history (non-authoritative — backend is session source of truth)
     const hist = loadHistory();
     if (hist.length === 0) return [];
-    return hist.map((t) =>
+    // 🛠️ CHANGE 3: Cast as any during map execution to restore saved attachments cleanly
+    return hist.map((t: StoredTurn) =>
       t.role === 'user'
-        ? ({ id: t.id, role: 'user', content: t.content, createdAt: t.createdAt } as const)
+        ? ({ id: t.id, role: 'user', content: t.content, createdAt: t.createdAt, attachments: t.attachments } as const)
         : ({
             id: t.id,
             role: 'assistant',
@@ -56,18 +69,30 @@ export default function App() {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages.length, busy]);
 
-  async function send(text: string) {
+  // 🛠️ CHANGE 4: Upgrade the send signature to handle the new attachments parameter array
+  async function send(text: string, attachments: UploadItem[] = []) {
     setError(null);
     setBusy(true);
 
     const session_id = getOrCreateSessionId();
     Sentry.setTag('session_id', session_id);
 
-    const userMsg: ChatMessageModel = { id: makeId('u'), role: 'user', content: text, createdAt: Date.now() };
+    // Map attachments down into simple file descriptors for the UI rendering bubble
+    const mappedAttachments = attachments.map((u) => ({ id: u.id, name: u.file.name }));
+
+    const userMsg: ChatMessageModel = { 
+      id: makeId('u'), 
+      role: 'user', 
+      content: text, 
+      createdAt: Date.now(),
+      attachments: mappedAttachments // Attaches files directly to the chat stream message
+    };
     setMessages((m) => [...m, userMsg]);
 
     try {
-      const result = await postChat({ query: text, session_id });
+      // Fallback fallback string if the text is empty but files were sent, avoiding backend schema errors
+      const queryText = text.trim() || "Analyze the uploaded document(s)";
+      const result = await postChat({ query: queryText, session_id });
 
       // Sync local storage if server minted/returned a new session id.
       syncSessionIdFromServer(result.session_id);

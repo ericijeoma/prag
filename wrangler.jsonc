@@ -4,7 +4,9 @@
 	"workers_dev": true,
 	"minify": true,
 	"compatibility_date": "2026-05-12",
-	"compatibility_flags": ["nodejs_compat"],
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
 	// Cloudflare Workers AI binding (used for embeddings)
 	"ai": {
 		"binding": "AI"
@@ -15,5 +17,26 @@
 	},
 	"observability": {
 		"enabled": true
-	}
+	},
+	"kv_namespaces": [
+		{
+			"binding": "TEMP_FILES",
+			"id": "ebc2391a51024eca8a020588e2773c3e"
+		}
+	],
+	"queues": {
+    "producers": [
+      {
+        "queue": "ingest-queue",
+        "binding": "ingest_queue"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ingest-queue",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5
+      }
+    ]
+  }
 }

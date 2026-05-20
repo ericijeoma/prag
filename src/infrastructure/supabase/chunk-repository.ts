@@ -58,6 +58,31 @@ export type ChatSessionRow = {
 
 export type ChatMessageRow = StoredChatMessage;
 
+function sanitizeDbText(text: string): string {
+  const normalized = text.normalize('NFKC');
+  let cleaned = '';
+
+  for (const ch of normalized) {
+    const code = ch.charCodeAt(0);
+    if (ch === '\n' || ch === '\t' || code >= 32) {
+      cleaned += ch;
+    }
+  }
+
+  return cleaned;
+}
+
+function sanitizeDeep(value: unknown): unknown {
+  if (typeof value === 'string') return sanitizeDbText(value);
+  if (Array.isArray(value)) return value.map(sanitizeDeep);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, val]) => [key, sanitizeDeep(val)]),
+    );
+  }
+  return value;
+}
+
 export class ChunkRepository implements TracePort, ChatMemoryPort {
   constructor(private readonly supabase: SupabaseClient) {}
 
@@ -257,15 +282,20 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
   }
 
   async insertDocument(input: DocumentInsert): Promise<{ id: string }> {
-    const { data, error } = await this.supabase.schema('public').rpc('prag_insert_document', {
-      p_tenant_id: TENANT_ID,
-      p_title: input.title,
-      p_content: input.content,
-      p_metadata: input.metadata ?? {},
-      p_file_path: input.file_path ?? null,
-      p_source_type: input.source_type ?? 'upload',
-    });
-    if (error) throw new AppError('Doc insert failed', { code: 'supabase_error', status: 500 });
+    const sanitizedMetadata = sanitizeDeep(input.metadata ?? {});
+
+  const { data, error } = await this.supabase.rpc('prag_insert_document', {
+    p_tenant_id: TENANT_ID,
+    p_title: input.title,
+    p_content: sanitizeDbText(input.content), // Also clean the content
+    p_metadata: sanitizedMetadata,            // Now the linter sees it as 'used'
+    p_file_path: input.file_path ?? null,
+    p_source_type: input.source_type ?? 'upload',
+  });
+    if (error) {
+      console.error("Supabase Error Details:", error);
+      throw new AppError('Doc insert failed', { code: 'supabase_error', status: 500, details: { message: error.message, details: error.details, hint: error.hint} });
+    }
     return { id: String(data) };
   }
 
@@ -323,7 +353,7 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
   }
 
   async similaritySearch(input: { embedding: number[]; topK?: number }): Promise<SimilarChunk[]> {
-    const { data, error } = await this.supabase.schema('public').rpc('prag_match_chunks', {
+    const { data, error } = await this.supabase.rpc('prag_match_chunks', {
       p_tenant_id: TENANT_ID,
       p_query_embedding: input.embedding,
       p_match_count: input.topK ?? 5,

@@ -3,10 +3,11 @@ import type { RetrievalPort } from '../../shared/contracts/retrieval.js';
 import { AppError } from '../../shared/http/errors.js';
 import type { ChatTurn } from '../../shared/types/chat.js';
 import { ChunkRepository } from '../../infrastructure/supabase/chunk-repository.js';
+import type { AiBinding } from '../../shared/types/ai.js';
 
 export type AnswerEnv = {
 	GROQ_API_KEY: string;
-	AI?: import('../../shared/types/ai.js').AiBinding;
+	AI?: AiBinding;
 };
 
 export type AnswerRequest = {
@@ -35,9 +36,9 @@ export type AnswerResult = {
 };
 
 const GROQ_MODEL = 'openai/gpt-oss-120b';
-
 const FAITHFULNESS_MODEL = '@cf/meta/llama-3-8b-instruct';
-// const MIN_RETRIEVAL_SCORE_FOR_ANSWER = 0.45;
+const REWRITE_HISTORY_LIMIT = 8;
+const MAX_CITATION_TEXT = 1600;
 
 type GroqGlobal = typeof globalThis & {
 	GROQ_API_KEY?: string;
@@ -47,40 +48,36 @@ function truncateText(text: string, maxLength: number): string {
 	if (text.length <= maxLength) {
 		return text;
 	}
-
 	return `${text.slice(0, maxLength)}...`;
 }
 
 function buildPrompt(query: string, citations: Citation[]): string {
-  const context = citations
-    .map((c, index) => {
-      const page = typeof c.page_number === 'number' ? c.page_number : 'N/A';
-      // Append the actual text content right below the metadata header
-      return [
-        `${c.source_label ?? `C${index + 1}`} | Page=${page} | Title="${c.document_title}"`,
-        c.text
-      ].join('\n');
-    })
-    .join('\n\n---\n\n');
+	const context = citations
+		.map((c, index) => {
+			const page = typeof c.page_number === 'number' ? c.page_number : 'N/A';
+			return [
+				`${c.source_label ?? `C${index + 1}`} | Page=${page} | Title="${c.document_title}"`,
+				c.text,
+			].join('\n');
+		})
+		.join('\n\n---\n\n');
 
-  return [
-    'You are PRAG, a production RAG agent.',
-    'You MUST answer ONLY using the context below.',
-    'If the context does not contain the needed information, say: "I don\'t have enough specific information to answer that."',
-    '',
-    'Citation rules (mandatory):',
-    '- Use only the labels [C1], [C2], ... that are provided in the context',
-    '- Do not invent sources, page numbers, or chunk IDs',
-    '- Every factual sentence must end with one or more labels',
-    '- Use one or more citations per sentence when needed.',
-    '- Do not invent sources/pages. If page is unknown, use Page: N/A.',
-    '',
-    'Context:',
-    context || '(No context found)',
-    '',
-    `Question: ${query}`,
-    'Answer:',
-  ].join('\n');
+	return [
+		'You are PRAG, a production RAG agent.',
+		'You MUST answer ONLY using the context below.',
+		'Iff the context does not contain the needed information, say: "I don\'t have enough specific information to answer that."',
+		'',
+		'Citation rules (mandatory):',
+		'- Use only the labels [C1], [C2], ... that are provided in the context.',
+		'- Do not invent sources, page numbers, or chunk IDs.',
+		'- Every factual sentence must end with one or more labels.',
+		'',
+		'Context:',
+		context || '(No context found)',
+		'',
+		`Question: ${query}`,
+		'Answer:',
+	].join('\n');
 }
 
 function buildFaithfulnessPrompt(args: { answer: string; context: string }): string {
@@ -116,6 +113,7 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
 	const start = text.indexOf('{');
 	const end = text.lastIndexOf('}');
 	if (start === -1 || end === -1 || end <= start) return null;
+
 	const slice = text.slice(start, end + 1);
 	try {
 		const parsed: unknown = JSON.parse(slice);
@@ -154,43 +152,44 @@ export class AnswerService {
 			throw new AppError('query is required', { code: 'bad_request', status: 400 });
 		}
 
-		const search = await this.retrieval.search({
-			query: input.query,
-			topK: 5,
-			// If retrieval implementation supports it, pass history for rewrite.
-			chatHistory: input.chatHistory,
-			traceId: input.traceId,
-		});
-
-		const rewrittenQuery = search.query;
 		const sessionKey = input.sessionId ?? input.traceId ?? 'default';
+		const queryRewrite = await this.rewriteStandaloneQuery({
+			query: input.query,
+			chatHistory: input.chatHistory ?? [],
+		});
 
 		await this.repo.upsertSession({
 			sessionKey,
-			state: {},
+			state: {
+				lastQuery: input.query,
+				lastRewrittenQuery: queryRewrite,
+				traceId: input.traceId ?? null,
+			},
 		});
 
 		await this.repo.appendSessionMessage({
 			sessionKey,
 			role: 'user',
 			content: input.query,
-			queryRewrite: rewrittenQuery ?? null,
-			retrievedChunkIds: search.results.map((r) => r.chunk_id),
+			queryRewrite: queryRewrite === input.query.trim() ? null : queryRewrite,
+			retrievedChunkIds: [],
 			citationMap: {},
 		});
 
-		// const bestScore = search.results[0]?.score ?? 0;
-		const hasEvidence = search.results.length > 0;
+		const search = await this.retrieval.search({
+			query: queryRewrite,
+			topK: 5,
+		});
 
-		if (!hasEvidence) {
+		if (search.results.length === 0) {
 			const answer = "I don't have enough specific information to answer that.";
 
 			await this.repo.appendSessionMessage({
 				sessionKey,
 				role: 'assistant',
 				content: answer,
-				queryRewrite: rewrittenQuery ?? null,
-				retrievedChunkIds: search.results.map((r) => r.chunk_id),
+				queryRewrite: queryRewrite === input.query.trim() ? null : queryRewrite,
+				retrievedChunkIds: [],
 				citationMap: {},
 			});
 
@@ -202,19 +201,18 @@ export class AnswerService {
 			};
 		}
 
-		// Provide parent_text to the LLM for generation; fallback to chunk_text.
 		const citations: Citation[] = search.results.map((r, idx) => ({
 			document_id: r.document_id,
 			document_title: r.document_title ?? 'Unknown Document',
 			chunk_id: r.chunk_id,
 			chunk_index: r.chunk_index,
 			page_number: r.page_number ?? null,
-			text: truncateText(r.parent_text ?? r.chunk_text, 1600),
+			text: truncateText(r.parent_text ?? r.chunk_text, MAX_CITATION_TEXT),
 			score: r.score,
 			source_label: `C${idx + 1}`,
 		}));
 
-		const prompt = buildPrompt(input.query, citations);
+		const prompt = buildPrompt(queryRewrite, citations);
 
 		const completion = await this.groq.chat.completions.create({
 			model: GROQ_MODEL,
@@ -227,7 +225,6 @@ export class AnswerService {
 
 		const rawAnswer = completion.choices?.[0]?.message?.content?.trim() ?? '';
 		const answer = renderAnswer(rawAnswer, citations);
-
 		const verified = await this.verifyFaithfulness({
 			answer,
 			citations,
@@ -237,11 +234,11 @@ export class AnswerService {
 			sessionKey,
 			role: 'assistant',
 			content: answer,
-			queryRewrite: rewrittenQuery ?? null,
+			queryRewrite: queryRewrite === input.query.trim() ? null : queryRewrite,
 			retrievedChunkIds: search.results.map((r) => r.chunk_id),
 			citationMap: Object.fromEntries(
-				citations.map((c, index) => [
-					`C${index + 1}`,
+				citations.map((c) => [
+					c.source_label ?? c.chunk_id,
 					{
 						document_id: c.document_id,
 						document_title: c.document_title,
@@ -252,12 +249,69 @@ export class AnswerService {
 			),
 		});
 
-		return { answer, citations, verified, degraded: !verified };
+		return {
+			answer,
+			citations,
+			verified,
+			degraded: !verified,
+		};
+	}
+
+	private async rewriteStandaloneQuery(input: {
+		query: string;
+		chatHistory: ChatTurn[];
+	}): Promise<string> {
+		const currentQuery = input.query.trim();
+
+		if (input.chatHistory.length === 0) {
+			return currentQuery;
+		}
+
+		const recentTurns = input.chatHistory.slice(-REWRITE_HISTORY_LIMIT);
+		const history = recentTurns
+			.map((turn) => `${turn.role.toUpperCase()}: ${turn.content}`)
+			.join('\n');
+
+		const prompt = [
+			'Rewrite the user query into a standalone retrieval query.',
+			'Resolve pronouns and references using the conversation history.',
+			'Return only the rewritten query.',
+			'',
+			'Conversation history:',
+			history,
+			'',
+			`User query: ${currentQuery}`,
+		].join('\n');
+
+		try {
+			const completion = await this.groq.chat.completions.create({
+				model: GROQ_MODEL,
+				messages: [
+					{
+						role: 'system',
+						content:
+							'You rewrite follow-up questions into standalone retrieval queries. Return only the rewritten query.',
+					},
+					{ role: 'user', content: prompt },
+				],
+				temperature: 0,
+			});
+
+			const rewritten = completion.choices?.[0]?.message?.content?.trim() ?? '';
+			if (!rewritten) {
+				return currentQuery;
+			}
+
+			return rewritten.replace(/^["'`]+|["'`]+$/g, '').trim() || currentQuery;
+		} catch {
+			return currentQuery;
+		}
 	}
 
 	private async verifyFaithfulness(input: { answer: string; citations: Citation[] }): Promise<boolean> {
-		// If Workers AI isn't configured, skip verification (still type-safe).
-		if (!this.deps.env.AI) return false;
+		if (!this.deps.env.AI) {
+			return false;
+		}
 
 		const context = input.citations.map((c) => c.text).join('\n\n---\n\n');
 		const prompt = buildFaithfulnessPrompt({ answer: input.answer, context });
@@ -273,27 +327,22 @@ export class AnswerService {
 
 		const text = this.extractText(result);
 		const json = text ? extractJsonObject(text) : null;
-		const verdict = json?.verdict;
-		if (verdict === 'supported') {
-			return true;
-		}
-
-		const unsupportedClaims = Array.isArray(json?.unsupported_claims) ? json.unsupported_claims : [];
-
-		// Allow minor paraphrasing differences.
-		// Fail only when verifier identifies multiple unsupported claims.
-		return unsupportedClaims.length <= 1;
+		return json?.verdict === 'supported';
 	}
 
 	private extractText(result: unknown): string | null {
 		if (typeof result === 'string') return result;
+
 		if (typeof result === 'object' && result !== null) {
 			const rec = result as Record<string, unknown>;
+
 			if (typeof rec.response === 'string') return rec.response;
+
 			if (typeof rec.result === 'object' && rec.result !== null) {
 				const inner = rec.result as Record<string, unknown>;
 				if (typeof inner.response === 'string') return inner.response;
 			}
+
 			const choices = rec.choices;
 			if (Array.isArray(choices) && choices.length > 0) {
 				const first = choices[0];
@@ -307,6 +356,7 @@ export class AnswerService {
 				}
 			}
 		}
+
 		return null;
 	}
 }

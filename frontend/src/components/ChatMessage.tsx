@@ -5,8 +5,9 @@ import { AnswerStatusBanner, type AnswerStatus } from './AnswerStatusBanner';
 import { CitationBadges } from './CitationBadges';
 import { MarkdownAnswer } from './MarkdownAnswer';
 
+// UPDATE: Add attachments to the user message model
 export type ChatMessageModel =
-  | { id: string; role: 'user'; content: string; createdAt: number }
+  | { id: string; role: 'user'; content: string; createdAt: number; attachments?: { id: string; name: string }[] }
   | { id: string; role: 'assistant'; result: AnswerResult; createdAt: number };
 
 function resolveStatus(result: AnswerResult): AnswerStatus {
@@ -19,8 +20,27 @@ export function ChatMessage({ msg }: { msg: ChatMessageModel }) {
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[75ch] rounded-2xl bg-sky-950/40 px-4 py-3 text-sm text-slate-100 ring-1 ring-sky-900/50">
-          <div className="whitespace-pre-wrap">{msg.content}</div>
+        <div className="max-w-[75ch] flex flex-col gap-2 items-end">
+          
+          {/* UPDATE: Render uploaded files inside the chat stream */}
+          {msg.attachments && msg.attachments.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2">
+              {msg.attachments.map((file) => (
+                <div key={file.id} className="flex items-center gap-2 rounded-lg bg-slate-800/80 px-3 py-1.5 text-xs text-slate-300 ring-1 ring-slate-700">
+                  <span>📄</span>
+                  <span className="max-w-[150px] truncate">{file.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Only render text bubble if they actually typed a message */}
+          {msg.content && (
+            <div className="rounded-2xl bg-sky-950/40 px-4 py-3 text-sm text-slate-100 ring-1 ring-sky-900/50">
+              <div className="whitespace-pre-wrap">{msg.content}</div>
+            </div>
+          )}
+
         </div>
       </div>
     );

@@ -197,6 +197,18 @@ export class IngestService {
   }
 
   private normalizeText(text: string): string {
-    return text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').replace(/•/g, '\n• ').trim();
+  const normalized = text.normalize('NFKC');
+  let cleaned = '';
+
+  for (const ch of normalized) {
+    const code = ch.charCodeAt(0);
+
+    // Keep printable chars, tabs, and newlines.
+    if (ch === '\n' || ch === '\t' || code >= 32) {
+      cleaned += ch;
+    }
   }
+
+  return cleaned.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
 }

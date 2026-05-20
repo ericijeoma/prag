@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/cloudflare'
 import { createSupabaseClient, type SupabaseEnv } from '../infrastructure/supabase/client.js'
 import { IngestService } from '../features/ingestion/ingest-service.js'
 import { SearchService } from '../features/retrieval/search-service.js'
@@ -10,6 +11,39 @@ import { AppError, isAppError } from '../shared/http/errors.js'
 import { resolveSessionId, resolveTraceId } from '../shared/trace/trace-id.js'
 
 type Json = Record<string, unknown>
+
+export type IngestJob = {
+  kvKey: string
+  fileName: string
+  ext: string
+  title: string
+  metadata: Record<string, unknown>
+  traceId: string
+  sessionId: string | null
+}
+
+export type AppEnv = SupabaseEnv & {
+  AI: AiBinding
+  GROQ_API_KEY: string
+  TEMP_FILES: KVNamespace
+  ingest_queue: Queue<IngestJob>
+}
+
+type ChatRequestBody = {
+  query?: string
+  session_id?: string
+}
+
+const SUPPORTED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md'] as const
+type SupportedExtension = (typeof SUPPORTED_EXTENSIONS)[number]
+
+function isSupportedExtension(ext: string): ext is SupportedExtension {
+  return (SUPPORTED_EXTENSIONS as readonly string[]).includes(ext)
+}
+
+function getExtension(fileName: string): string {
+  return fileName.split('.').pop()?.toLowerCase() ?? ''
+}
 
 function json(data: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers)
@@ -25,48 +59,39 @@ function methodNotAllowed(): Response {
   return json({ ok: false, error: { code: 'bad_request', message: 'Method not allowed' } }, { status: 405 })
 }
 
+// FIXED: Utilized 'err' context inside the AppError constructor details to resolve compiler warning
 async function readJson<T extends Json>(req: Request): Promise<T> {
-  const text = await req.text()
-  if (!text) return {} as T
-  return JSON.parse(text) as T
+  try {
+    const text = await req.text()
+    if (!text.trim()) return {} as T
+    return JSON.parse(text) as T
+  } catch (err) {
+    throw new AppError('Malformed JSON payload received', { 
+      code: 'bad_request', 
+      status: 400,
+      details: err instanceof Error ? err.message : String(err)
+    })
+  }
 }
 
 function toErrorResponse(err: unknown): Response {
   if (isAppError(err)) {
     return json(
-      {
-        ok: false,
-        error: {
-          code: err.code,
-          message: err.message,
-          details: err.details,
-        },
-      },
+      { ok: false, error: { code: err.code, message: err.message, details: err.details } },
       { status: err.status },
     )
   }
-
   const message = err instanceof Error ? err.message : 'Unknown error'
-  return json(
-    {
-      ok: false,
-      error: {
-        code: 'internal_error',
-        message,
-      },
-    },
-    { status: 500 },
-  )
+  return json({ ok: false, error: { code: 'internal_error', message } }, { status: 500 })
 }
 
-export type AppEnv = SupabaseEnv & {
-  AI: AiBinding
-  GROQ_API_KEY: string
-}
-
-type ChatRequestBody = {
-  query?: string
-  session_id?: string
+function parseMetadata(raw: string | File | null): Record<string, unknown> {
+  if (!raw || typeof raw !== 'string') return {}
+  try {
+    return JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    throw new AppError('Invalid JSON format in metadata field', { code: 'bad_request', status: 400 })
+  }
 }
 
 export async function handleRequest(request: Request, env: AppEnv): Promise<Response> {
@@ -74,7 +99,6 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
   const path = url.pathname
   const method = request.method.toUpperCase()
 
-  // Global TraceID + session headers
   const traceId = resolveTraceId(request.headers)
   const sessionIdFromHeader = resolveSessionId(request.headers)
 
@@ -82,16 +106,17 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
   try {
     supabase = createSupabaseClient(env)
   } catch (err) {
-    // Allow /health to report missing env gracefully.
+    Sentry.captureException(err)
     if (!(method === 'GET' && path === '/health')) return toErrorResponse(err)
   }
 
+  // ── GET /health ─────────────────────────────────────────────────────────────
   if (method === 'GET' && path === '/health') {
     try {
       const report = await buildHealthReport({ env, supabase })
       return json(report, { status: report.ok ? 200 : 503 })
     } catch (err) {
-      // If DB healthcheck throws, return structured error.
+      Sentry.captureException(err)
       return toErrorResponse(
         err instanceof AppError
           ? err
@@ -100,89 +125,98 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
     }
   }
 
+  // ── POST /ingest ─────────────────────────────────────────────────────────────
   if (path === '/ingest') {
     if (method !== 'POST') return methodNotAllowed()
+
     try {
       const contentType = request.headers.get('content-type') ?? ''
 
-      let title: string
-      let content: string
-      let metadata: Record<string, unknown> = {}
-      let file_path: string | null = null
-      let source_type = 'upload'
-
       if (contentType.includes('multipart/form-data')) {
         const formData = await request.formData()
-        // Cloudflare Workers' FormData typings sometimes omit File in FormDataEntryValue.
-        // Cast to the runtime shape we expect so we can safely access `name` after narrowing.
-        const file = formData.get('file') as unknown as File | string | null
 
-        if (!file || typeof file === 'string') {
+        const fileEntry = formData.get('file')
+        if (!fileEntry || typeof fileEntry === 'string') {
           return badRequest('file field is required for multipart upload')
         }
+        const file = fileEntry as unknown as File
 
-        source_type = file.name.endsWith('.pdf')? 'pdf': 'text'
-        if (source_type == 'pdf'){
-
-          // Extract text from PDF using unpdf
-          const { extractText } = await import('unpdf')
-          const buffer = await file.arrayBuffer()
-          const { text } = await extractText(new Uint8Array(buffer), {
-            mergePages: true,
-          })
-          content = text
-        }
-        else{
-          content = await file.text()
-        }
-
-        title = (formData.get('title') as string | null) ?? file.name
-        file_path = file.name
-
-        const metaRaw = formData.get('metadata')
-        if (metaRaw && typeof metaRaw === 'string') {
-          try {
-            metadata = JSON.parse(metaRaw)
-          } catch {
-            /* ignore */
-          }
-        }
-      } else {
-        const body = await readJson<{
-          title?: string
-          content?: string
-          metadata?: Record<string, unknown>
-          file_path?: string | null
-          source_type?: string
-        }>(request)
-
-        if (!body.title || !body.content) {
-          return badRequest('title and content are required')
+        const MAX_BYTES = 25 * 1024 * 1024
+        if (file.size > MAX_BYTES) {
+          return json(
+            {
+              ok: false,
+              error: {
+                code: 'file_too_large',
+                message: `File exceeds 25 MB limit (${(file.size / 1e6).toFixed(1)} MB)`,
+              },
+            },
+            { status: 413 },
+          )
         }
 
-        title = body.title
-        content = body.content
-        metadata = body.metadata ?? {}
-        file_path = body.file_path ?? null
-        source_type = body.source_type ?? 'upload'
+        const ext = getExtension(file.name)
+        if (!isSupportedExtension(ext)) {
+          return badRequest(
+            `Unsupported file type: .${ext}. Supported: ${SUPPORTED_EXTENSIONS.join(', ')}`,
+          )
+        }
+
+        const title = (formData.get('title') as string | null) ?? file.name
+        const metadata = parseMetadata(formData.get('metadata'))
+        const explicitSessionId = (formData.get('session_id') as string | null) || sessionIdFromHeader
+
+        const kvKey = `ingest_${crypto.randomUUID()}`
+        const buffer = await file.arrayBuffer()
+        await env.TEMP_FILES.put(kvKey, buffer, { expirationTtl: 3600 })
+
+        const job: IngestJob = { 
+          kvKey, 
+          fileName: file.name, 
+          ext, 
+          title, 
+          metadata, 
+          traceId, 
+          sessionId: explicitSessionId || null 
+        }
+        await env.ingest_queue.send(job)
+
+        return json(
+          { ok: true, queued: true, message: 'File received and queued for processing' },
+          { status: 202 },
+        )
+      }
+
+      const body = await readJson<{
+        title?: string
+        content?: string
+        metadata?: Record<string, unknown>
+        file_path?: string | null
+        source_type?: string
+      }>(request)
+
+      if (!body.title || !body.content) {
+        return badRequest('title and content are required')
       }
 
       const svc = new IngestService({ supabase: supabase!, env })
       const result = await svc.ingest({
-        title,
-        content,
-        metadata,
-        file_path,
-        source_type,
+        title: body.title,
+        content: body.content,
+        metadata: body.metadata ?? {},
+        file_path: body.file_path ?? null,
+        source_type: body.source_type ?? 'upload',
         trace_id: traceId,
       })
 
       return json({ ok: true, result })
     } catch (err) {
+      Sentry.captureException(err)
       return toErrorResponse(err)
     }
   }
 
+  // ── POST /search ─────────────────────────────────────────────────────────────
   if (path === '/search') {
     if (method !== 'POST') return methodNotAllowed()
     try {
@@ -193,10 +227,12 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
       const result = await svc.search({ query: body.query, topK: 5, traceId })
       return json({ ok: true, result })
     } catch (err) {
+      Sentry.captureException(err)
       return toErrorResponse(err)
     }
   }
 
+  // ── POST /answer ─────────────────────────────────────────────────────────────
   if (path === '/answer') {
     if (method !== 'POST') return methodNotAllowed()
     try {
@@ -212,10 +248,12 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
       const result = await svc.answer({ query: body.query, traceId })
       return json({ ok: true, result })
     } catch (err) {
+      Sentry.captureException(err)
       return toErrorResponse(err)
     }
   }
 
+  // ── POST /chat ───────────────────────────────────────────────────────────────
   if (path === '/chat') {
     if (method !== 'POST') return methodNotAllowed()
     try {
@@ -223,7 +261,6 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
       const query = body.query?.trim()
       if (!query) return badRequest('query is required')
 
-      // session can come from header or body
       const sessionId = body.session_id?.trim() || sessionIdFromHeader
 
       const searchSvc = new SearchService({ supabase: supabase!, env })
@@ -232,7 +269,6 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
         repo: new ChunkRepository(supabase!),
         env: { GROQ_API_KEY: env.GROQ_API_KEY, AI: env.AI },
       })
-
       const chatSvc = new ChatService({
         answer: answerSvc,
         memory: new ChunkRepository(supabase!),
@@ -240,17 +276,16 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
 
       const chat = await chatSvc.chat({ query, traceId, sessionId })
 
-      return json({ ok: true, result: { ...chat.result, session_id: chat.session_id }, traceId: chat.traceId })
+      return json({
+        ok: true,
+        result: { ...chat.result, session_id: chat.session_id },
+        traceId: chat.traceId,
+      })
     } catch (err) {
+      Sentry.captureException(err)
       return toErrorResponse(err)
     }
   }
 
-  return json({ ok: false, error: { code: 'bad_request', message: 'Not found' } }, { status: 404 })
+  return json({ ok: false, error: { code: 'not_found', message: 'Not found' } }, { status: 404 })
 }
-
-
-
-
-
-

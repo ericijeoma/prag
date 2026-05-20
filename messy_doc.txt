@@ -8,3 +8,6 @@ This   has     too    many spaces and
 
 
 too many newlines.
+
+tenant= 00000000-0000-0000-0000-000000000001 
+ session = 28759feb-5421-4a8f-9ec7-7e1309b3ad23
