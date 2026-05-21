@@ -104,6 +104,7 @@ export default function App() {
       const assistantMsg: ChatMessageModel = { id: makeId('a'), role: 'assistant', result, createdAt: Date.now() };
       setMessages((m) => [...m, assistantMsg]);
     } catch (e) {
+      Sentry.captureException(e); 
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
     } finally {
@@ -123,6 +124,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
+    <button
+      className="mt-4 rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-600"
+      onClick={() => { throw new Error("Sentry test error"); }}
+    >
+      Test Sentry
+    </button>
       <div className="flex h-screen">
         <SidebarHistory turns={historyTurns} onClear={clearAllHistory} />
 
@@ -130,6 +137,11 @@ export default function App() {
           <TopBar onNewSession={newSession} />
 
           <div ref={scrollerRef} className="flex-1 overflow-auto px-4 py-6">
+          
+
+
+
+
             <div className="mx-auto flex max-w-4xl flex-col gap-4">
               {messages.length === 0 ? (
                 <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-6">

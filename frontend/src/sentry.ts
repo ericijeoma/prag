@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/react';
 const RELEASE = 'rag@1.0.0';
 
 Sentry.init({
-	dsn: "https://d91c553c9d0d2b8bd82e1b6897296551936.ingest.de.sentry.io/4511417310904400",
+	dsn: import.meta.env.VITE_SENTRY_FRONTEND_DSN,
 	release: import.meta.env.VITE_SENTRY_RELEASE ?? RELEASE,
 	integrations: [Sentry.browserTracingIntegration()],
 	tracesSampleRate: 0.2,
