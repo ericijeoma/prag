@@ -80,15 +80,15 @@ export class IngestService {
       });
 
       // 1. Insert Document
+      const normalizedContent = this.normalizeText(input.content);
       const { id: documentId } = await this.repo.insertDocument({
         title: input.title,
-        content: this.normalizeText(input.content),
+        content: normalizedContent,
         metadata: { ...(input.metadata ?? {}), traceId },
         file_path: input.file_path ?? null,
         source_type: input.source_type ?? 'upload',
       });
 
-      const normalizedContent = this.normalizeText(input.content);
 
       // Child chunks: used for vector retrieval.
       const childChunks = this.chunker.chunk(normalizedContent);
