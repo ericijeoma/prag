@@ -15,6 +15,8 @@ export type SearchRequest = {
   topK?: number;
   traceId?: string;
   chatHistory?: ChatTurn[];
+  sessionId?: string | null;
+  documentIds?: string[];
 };
 
 export type SearchResult = {
@@ -25,7 +27,7 @@ export type SearchResult = {
 const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
 const REWRITE_MODEL = '@cf/meta/llama-3-8b-instruct';
 
-const MIN_SCORE = 0.55;
+const MIN_SCORE = 0.45;
 export const RAG_V3_MIN_SCORE = 0.45;
 
 function isNumberArray(value: unknown): value is number[] {
@@ -72,19 +74,13 @@ function extractEmbedding(result: unknown): number[] | null {
     if (typeof candidate === 'object' && candidate !== null) {
       const nested = candidate as { embedding?: unknown; data?: unknown; result?: unknown };
       const nestedEmbedding = extractEmbedding(nested.embedding);
-      if (nestedEmbedding) {
-        return nestedEmbedding;
-      }
+      if (nestedEmbedding) return nestedEmbedding;
 
       const nestedData = extractEmbedding(nested.data);
-      if (nestedData) {
-        return nestedData;
-      }
+      if (nestedData) return nestedData;
 
       const nestedResult = extractEmbedding(nested.result);
-      if (nestedResult) {
-        return nestedResult;
-      }
+      if (nestedResult) return nestedResult;
     }
   }
 
@@ -120,6 +116,8 @@ export class SearchService {
     const rawResults = await this.repo.similaritySearch({
       embedding,
       topK: fetchK,
+      sessionId: input.sessionId ?? null,
+      documentIds: input.documentIds,
     });
 
     const deduped = new Map<string, SimilarChunk>();
@@ -160,7 +158,6 @@ export class SearchService {
   }
 
   private async rewriteQuery(input: { chatHistory: ChatTurn[]; currentQuery: string }): Promise<string> {
-    // If there is no history, skip rewrite for latency.
     if (input.chatHistory.length === 0) {
       return input.currentQuery.trim();
     }
@@ -176,7 +173,6 @@ export class SearchService {
       max_tokens: 128,
     });
 
-    // Workers AI chat models can return different shapes; accept common ones.
     if (typeof result === 'string') {
       return result.trim() || input.currentQuery.trim();
     }
@@ -184,17 +180,14 @@ export class SearchService {
     if (typeof result === 'object' && result !== null) {
       const rec = result as Record<string, unknown>;
 
-      // common: { result: { response: "..." } }
       if (typeof rec.result === 'object' && rec.result !== null) {
         const inner = rec.result as Record<string, unknown>;
         const response = inner.response;
         if (typeof response === 'string' && response.trim()) return response.trim();
       }
 
-      // common: { response: "..." }
       if (typeof rec.response === 'string' && rec.response.trim()) return rec.response.trim();
 
-      // common: { choices: [ { message: { content: "..." } } ] }
       const choices = rec.choices;
       if (Array.isArray(choices) && choices.length > 0) {
         const first = choices[0] as unknown;
@@ -218,8 +211,7 @@ export class SearchService {
     const vector = extractEmbedding(result);
 
     if (!vector) {
-      const resultShape =
-        typeof result === 'object' && result !== null ? Object.keys(result) : [];
+      const resultShape = typeof result === 'object' && result !== null ? Object.keys(result) : [];
       throw new AppError('Workers AI embedding returned an unexpected shape', {
         code: 'internal_error',
         status: 500,

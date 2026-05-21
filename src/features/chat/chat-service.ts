@@ -13,6 +13,7 @@ export type ChatRequest = {
     query: string;
     traceId: string;
     sessionId?: string | null;
+    documentIds?:string[]
 };
 
 export type ChatResponse = {
@@ -70,6 +71,7 @@ export class ChatService {
             traceId: input.traceId,
             sessionId: session_id,
             chatHistory,
+            documentIds: input.documentIds
         });
 
         return {

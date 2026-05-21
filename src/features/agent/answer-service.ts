@@ -15,6 +15,7 @@ export type AnswerRequest = {
 	traceId?: string;
 	sessionId?: string;
 	chatHistory?: ChatTurn[];
+	documentIds?: string[];
 };
 
 export type Citation = {
@@ -49,6 +50,22 @@ function truncateText(text: string, maxLength: number): string {
 		return text;
 	}
 	return `${text.slice(0, maxLength)}...`;
+}
+
+function normalizeDocumentIds(documentIds?: string[]): string[] | undefined {
+	if (!documentIds || documentIds.length === 0) {
+		return undefined;
+	}
+
+	const cleaned = Array.from(
+		new Set(
+			documentIds
+				.map((id) => id.trim())
+				.filter((id) => id.length > 0),
+		),
+	);
+
+	return cleaned.length > 0 ? cleaned : undefined;
 }
 
 function buildPrompt(query: string, citations: Citation[]): string {
@@ -153,6 +170,8 @@ export class AnswerService {
 		}
 
 		const sessionKey = input.sessionId ?? input.traceId ?? 'default';
+		const documentIds = normalizeDocumentIds(input.documentIds);
+
 		const queryRewrite = await this.rewriteStandaloneQuery({
 			query: input.query,
 			chatHistory: input.chatHistory ?? [],
@@ -163,6 +182,7 @@ export class AnswerService {
 			state: {
 				lastQuery: input.query,
 				lastRewrittenQuery: queryRewrite,
+				lastDocumentIds: documentIds ?? null,
 				traceId: input.traceId ?? null,
 			},
 		});
@@ -179,6 +199,8 @@ export class AnswerService {
 		const search = await this.retrieval.search({
 			query: queryRewrite,
 			topK: 5,
+			sessionId: input.sessionId ?? null,
+			documentIds,
 		});
 
 		if (search.results.length === 0) {

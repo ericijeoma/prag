@@ -1,24 +1,20 @@
-// This contract is the only thing the agent feature is
-// allowed to know about retrieval. The concrete implementation
-// lives in features/retrieval — never imported by agent directly.
+import type { ChatTurn } from '../types/chat.js';
+import type { SimilarChunk } from '../../infrastructure/supabase/chunk-repository.js';
 
-export interface ChunkResult {
-  document_id: string;
-  chunk_id: string;
-  chunk_index: number;
-  chunk_text: string;
-  parent_text?: string | null;
-  page_number?: number | null;
-  is_child?: boolean;
-  document_title?: string
-  score: number;
-}
+export type RetrievalRequest = {
+  query: string;
+  topK?: number;
+  traceId?: string;
+  chatHistory?: ChatTurn[];
+  sessionId?: string | null;
+  documentIds?: string[];
+};
+
+export type RetrievalResult = {
+  query: string;
+  results: SimilarChunk[];
+};
 
 export interface RetrievalPort {
-  search(input: {
-    query: string;
-    topK?: number;
-    traceId?: string;
-    chatHistory?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
-  }): Promise<{ query: string; results: ChunkResult[] }>;
+  search(input: RetrievalRequest): Promise<RetrievalResult>;
 }

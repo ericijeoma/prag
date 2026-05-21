@@ -48,9 +48,9 @@ function buildCorsHeaders(origin: string | null): Headers {
 
   headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   headers.set(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, x-session-id, x-trace-id, sentry-trace, baggage',
-  );
+  'Access-Control-Allow-Headers',
+  'Content-Type, Authorization, x-session-id, x-trace-id, x-file-metadata, sentry-trace, baggage',
+);
 
   return headers;
 }
@@ -235,7 +235,15 @@ export default Sentry.withSentry(
       const origin = request.headers.get('Origin');
 
       if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: buildCorsHeaders(origin) });
+        const headers = new Headers({
+          'Access-Control-Allow-Origin': origin ?? '*',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers':
+            'Content-Type, Authorization, x-session-id, x-trace-id, x-file-metadata, x-file-name, sentry-trace, baggage',
+          'Vary': 'Origin',
+        });
+
+        return new Response(null, { status: 204, headers });
       }
 
       try {

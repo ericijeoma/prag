@@ -3,12 +3,13 @@ import { createTraceId } from './trace';
 
 const INGEST_ENDPOINT = 'https://prag.ericijeoma7767.workers.dev/ingest';
 
-type IngestEnvelopeOk = { ok: true; result?: unknown; queued?: boolean };
+// Added document_id to the success envelope
+type IngestEnvelopeOk = { ok: true; result?: unknown; queued?: boolean; document_id?: string };
 type IngestEnvelopeErr = { ok: false; error?: { code?: string; message?: string; details?: unknown } };
 type IngestEnvelope = IngestEnvelopeOk | IngestEnvelopeErr;
 
 export type IngestOutcome =
-  | { ok: true; traceId: string; queued: boolean }
+  | { ok: true; traceId: string; queued: boolean; documentId?: string }
   | { ok: false; traceId: string; message: string };
 
 export async function ingestFile(
@@ -26,7 +27,6 @@ export async function ingestFile(
       size: file.size,
     });
 
-    // FIXED: Direct Binary Streaming. No FormData wrappers.
     const res = await fetch(INGEST_ENDPOINT, {
       method: 'POST',
       headers: {
@@ -36,7 +36,7 @@ export async function ingestFile(
         'x-file-metadata': encodeURIComponent(metadata),
         'content-type': file.type || 'application/octet-stream',
       },
-      body: file, // Send the raw Blob directly
+      body: file,
     });
 
     let envelope: IngestEnvelope;
@@ -58,7 +58,13 @@ export async function ingestFile(
       return { ok: false, traceId, message };
     }
 
-    return { ok: true, traceId, queued: res.status === 202 };
+    // Explicitly extract document_id from the successful envelope
+    return { 
+      ok: true, 
+      traceId, 
+      queued: res.status === 202,
+      documentId: 'document_id' in envelope ? envelope.document_id : undefined 
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Network error';
     Sentry.captureException(err);

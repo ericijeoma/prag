@@ -20,6 +20,9 @@ export type IngestJob = {
   metadata: Record<string, unknown>
   traceId: string
   sessionId: string | null
+
+  // NEW: stable file scope id for frontend + retrieval
+  documentId: string
 }
 
 export type AppEnv = SupabaseEnv & {
@@ -31,7 +34,8 @@ export type AppEnv = SupabaseEnv & {
 
 type ChatRequestBody = {
   query?: string
-  session_id?: string
+  session_id?: string,
+  document_ids?: string[]
 }
 
 const SUPPORTED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md'] as const
@@ -126,96 +130,173 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
   }
 
   // ── POST /ingest ─────────────────────────────────────────────────────────────
-  if (path === '/ingest') {
-    if (method !== 'POST') return methodNotAllowed()
 
-    try {
-      const contentType = request.headers.get('content-type') ?? ''
+// ── POST /ingest ─────────────────────────────────────────────────────────────
+if (path === '/ingest') {
+  if (method !== 'POST') return methodNotAllowed()
 
-      if (contentType.includes('multipart/form-data')) {
-        const formData = await request.formData()
+  try {
+    const contentType = request.headers.get('content-type') ?? ''
+    const headerFileName = request.headers.get('x-file-name')
+    const headerMetadata = request.headers.get('x-file-metadata')
 
-        const fileEntry = formData.get('file')
-        if (!fileEntry || typeof fileEntry === 'string') {
-          return badRequest('file field is required for multipart upload')
+    const parseMetadataHeader = (raw: string | null): Record<string, unknown> => {
+      if (!raw) return {}
+      try {
+        return JSON.parse(decodeURIComponent(raw)) as Record<string, unknown>
+      } catch {
+        try {
+          return JSON.parse(raw) as Record<string, unknown>
+        } catch {
+          throw new AppError('Invalid JSON format in x-file-metadata header', {
+            code: 'bad_request',
+            status: 400,
+          })
         }
-        const file = fileEntry as unknown as File
+      }
+    }
 
-        const MAX_BYTES = 25 * 1024 * 1024
-        if (file.size > MAX_BYTES) {
-          return json(
-            {
-              ok: false,
-              error: {
-                code: 'file_too_large',
-                message: `File exceeds 25 MB limit (${(file.size / 1e6).toFixed(1)} MB)`,
-              },
-            },
-            { status: 413 },
-          )
-        }
+    const createQueuedUpload = async (fileName: string, ext: string, title: string, metadata: Record<string, unknown>, buffer: ArrayBuffer, explicitSessionId: string | null) => {
+      const documentId = crypto.randomUUID()
+      const kvKey = `ingest_${crypto.randomUUID()}`
 
-        const ext = getExtension(file.name)
-        if (!isSupportedExtension(ext)) {
-          return badRequest(
-            `Unsupported file type: .${ext}. Supported: ${SUPPORTED_EXTENSIONS.join(', ')}`,
-          )
-        }
+      await env.TEMP_FILES.put(kvKey, buffer, { expirationTtl: 3600 })
 
-        const title = (formData.get('title') as string | null) ?? file.name
-        const metadata = parseMetadata(formData.get('metadata'))
-        const explicitSessionId = (formData.get('session_id') as string | null) || sessionIdFromHeader
+      const job: IngestJob = {
+        kvKey,
+        fileName,
+        ext,
+        title,
+        metadata: {
+          ...metadata,
+          document_id: documentId,
+        },
+        traceId,
+        sessionId: explicitSessionId,
+        documentId,
+      }
 
-        const kvKey = `ingest_${crypto.randomUUID()}`
-        const buffer = await file.arrayBuffer()
-        await env.TEMP_FILES.put(kvKey, buffer, { expirationTtl: 3600 })
+      await env.ingest_queue.send(job)
 
-        const job: IngestJob = { 
-          kvKey, 
-          fileName: file.name, 
-          ext, 
-          title, 
-          metadata, 
-          traceId, 
-          sessionId: explicitSessionId || null 
-        }
-        await env.ingest_queue.send(job)
+      return json(
+        {
+          ok: true,
+          queued: true,
+          document_id: documentId,
+          message: 'File received and queued for processing',
+        },
+        { status: 202 },
+      )
+    }
 
+    // 1) Multipart upload path
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await request.formData()
+
+      const fileEntry = formData.get('file')
+      if (!fileEntry || typeof fileEntry === 'string') {
+        return badRequest('file field is required for multipart upload')
+      }
+      const file = fileEntry as unknown as File
+
+      const MAX_BYTES = 25 * 1024 * 1024
+      if (file.size > MAX_BYTES) {
         return json(
-          { ok: true, queued: true, message: 'File received and queued for processing' },
-          { status: 202 },
+          {
+            ok: false,
+            error: {
+              code: 'file_too_large',
+              message: `File exceeds 25 MB limit (${(file.size / 1e6).toFixed(1)} MB)`,
+            },
+          },
+          { status: 413 },
         )
       }
 
-      const body = await readJson<{
-        title?: string
-        content?: string
-        metadata?: Record<string, unknown>
-        file_path?: string | null
-        source_type?: string
-      }>(request)
-
-      if (!body.title || !body.content) {
-        return badRequest('title and content are required')
+      const ext = getExtension(file.name)
+      if (!isSupportedExtension(ext)) {
+        return badRequest(
+          `Unsupported file type: .${ext}. Supported: ${SUPPORTED_EXTENSIONS.join(', ')}`,
+        )
       }
 
-      const svc = new IngestService({ supabase: supabase!, env })
-      const result = await svc.ingest({
-        title: body.title,
-        content: body.content,
-        metadata: body.metadata ?? {},
-        file_path: body.file_path ?? null,
-        source_type: body.source_type ?? 'upload',
-        trace_id: traceId,
-      })
+      const title = (formData.get('title') as string | null) ?? file.name
+      const metadata = parseMetadata(formData.get('metadata'))
+      const explicitSessionId = (formData.get('session_id') as string | null) || sessionIdFromHeader
 
-      return json({ ok: true, result })
-    } catch (err) {
-      Sentry.captureException(err)
-      return toErrorResponse(err)
+      return createQueuedUpload(file.name, ext, title, metadata, await file.arrayBuffer(), explicitSessionId || null)
     }
-  }
 
+    // 2) Raw binary upload path
+    if (
+      contentType.startsWith('application/pdf') ||
+      contentType.startsWith('application/octet-stream') ||
+      contentType.startsWith('application/vnd.openxmlformats-officedocument.wordprocessingml.document') ||
+      contentType.startsWith('text/plain') ||
+      contentType.startsWith('text/markdown')
+    ) {
+      if (!headerFileName) {
+        return badRequest('x-file-name header is required for raw file uploads')
+      }
+
+      const ext = getExtension(headerFileName)
+      if (!isSupportedExtension(ext)) {
+        return badRequest(
+          `Unsupported file type: .${ext}. Supported: ${SUPPORTED_EXTENSIONS.join(', ')}`,
+        )
+      }
+
+      const MAX_BYTES = 25 * 1024 * 1024
+      const buffer = await request.arrayBuffer()
+
+      if (buffer.byteLength > MAX_BYTES) {
+        return json(
+          {
+            ok: false,
+            error: {
+              code: 'file_too_large',
+              message: `File exceeds 25 MB limit (${(buffer.byteLength / 1e6).toFixed(1)} MB)`,
+            },
+          },
+          { status: 413 },
+        )
+      }
+
+      const metadata = parseMetadataHeader(headerFileName ? headerMetadata : null)
+      const title = (metadata.title as string | undefined) ?? headerFileName
+
+      return createQueuedUpload(headerFileName, ext, title, metadata, buffer, sessionIdFromHeader || null)
+    }
+
+    // 3) JSON ingestion path
+    const body = await readJson<{
+      title?: string
+      content?: string
+      metadata?: Record<string, unknown>
+      file_path?: string | null
+      source_type?: string
+    }>(request)
+
+    if (!body.title || !body.content) {
+      return badRequest('title and content are required')
+    }
+
+    const svc = new IngestService({ supabase: supabase!, env })
+    const result = await svc.ingest({
+      title: body.title,
+      content: body.content,
+      metadata: body.metadata ?? {},
+      file_path: body.file_path ?? null,
+      source_type: body.source_type ?? 'upload',
+      trace_id: traceId,
+    })
+
+    return json({ ok: true, result })
+  } catch (err) {
+    Sentry.captureException(err)
+    return toErrorResponse(err)
+  }
+}
   // ── POST /search ─────────────────────────────────────────────────────────────
   if (path === '/search') {
     if (method !== 'POST') return methodNotAllowed()
@@ -262,6 +343,9 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
       if (!query) return badRequest('query is required')
 
       const sessionId = body.session_id?.trim() || sessionIdFromHeader
+      
+      // Extract scope parameters from payload
+      const documentIds = body.document_ids ?? []
 
       const searchSvc = new SearchService({ supabase: supabase!, env })
       const answerSvc = new AnswerService({
@@ -274,7 +358,13 @@ export async function handleRequest(request: Request, env: AppEnv): Promise<Resp
         memory: new ChunkRepository(supabase!),
       })
 
-      const chat = await chatSvc.chat({ query, traceId, sessionId })
+      // Send documentIds into the service to scope the semantic search
+      const chat = await chatSvc.chat({ 
+        query, 
+        traceId, 
+        sessionId,
+        documentIds 
+      })
 
       return json({
         ok: true,

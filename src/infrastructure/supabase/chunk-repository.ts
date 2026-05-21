@@ -19,7 +19,6 @@ export type ChunkInsert = {
   chunk_index: number;
   chunk_text: string;
   chunk_metadata?: Record<string, unknown>;
-  // RAG V3 hierarchical schema support
   parent_text?: string | null;
   page_number?: number | null;
   is_child?: boolean;
@@ -83,6 +82,11 @@ function sanitizeDeep(value: unknown): unknown {
   return value;
 }
 
+// function getSessionIdFromChunkMetadata(metadata: Record<string, unknown>): string | null {
+//   const raw = metadata.session_id ?? metadata.sessionId ?? metadata.session;
+//   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+// }
+
 export class ChunkRepository implements TracePort, ChatMemoryPort {
   constructor(private readonly supabase: SupabaseClient) {}
 
@@ -104,7 +108,12 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
       throw new AppError('Failed to start ingestion job', {
         code: 'supabase_error',
         status: 500,
-        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+        details: {
+          message: error.message,
+          code: error.code,
+          hint: error.hint,
+          details: error.details,
+        },
       });
     }
 
@@ -126,7 +135,12 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
       throw new AppError('Failed to complete ingestion job', {
         code: 'supabase_error',
         status: 500,
-        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+        details: {
+          message: error.message,
+          code: error.code,
+          hint: error.hint,
+          details: error.details,
+        },
       });
     }
   }
@@ -141,7 +155,12 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
       throw new AppError('Failed to fail ingestion job', {
         code: 'supabase_error',
         status: 500,
-        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+        details: {
+          message: error.message,
+          code: error.code,
+          hint: error.hint,
+          details: error.details,
+        },
       });
     }
   }
@@ -162,7 +181,12 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
       throw new AppError('Failed to upsert session', {
         code: 'supabase_error',
         status: 500,
-        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+        details: {
+          message: error.message,
+          code: error.code,
+          hint: error.hint,
+          details: error.details,
+        },
       });
     }
 
@@ -180,7 +204,7 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
     const { data, error } = await this.supabase.schema('public').rpc('prag_append_session_message', {
       p_session_key: input.sessionKey,
       p_role: input.role,
-      p_content: input.content,
+      p_content: sanitizeDbText(input.content),
       p_query_rewrite: input.queryRewrite ?? null,
       p_retrieved_chunk_ids: input.retrievedChunkIds ?? [],
       p_citation_map: input.citationMap ?? {},
@@ -190,7 +214,12 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
       throw new AppError('Failed to append session message', {
         code: 'supabase_error',
         status: 500,
-        details: { message: error.message, code: error.code, hint: error.hint, details: error.details },
+        details: {
+          message: error.message,
+          code: error.code,
+          hint: error.hint,
+          details: error.details,
+        },
       });
     }
 
@@ -203,9 +232,12 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
       p_trace_id: input.traceId,
       p_event_type: input.event_type,
       p_stage: input.stage,
-      p_payload: input.payload,
+      p_payload: sanitizeDeep(input.payload),
     });
-    if (error) throw new AppError('Trace failed', { code: 'supabase_error', status: 500 });
+
+    if (error) {
+      throw new AppError('Trace failed', { code: 'supabase_error', status: 500 });
+    }
   }
 
   async createChatSession(input: { traceId: string }): Promise<{ id: string }> {
@@ -236,9 +268,9 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
       p_tenant_id: TENANT_ID,
       p_session_id: input.session_id,
       p_role: input.role,
-      p_content: input.content,
+      p_content: sanitizeDbText(input.content),
       p_trace_id: input.trace_id,
-      p_citations: input.citations,
+      p_citations: sanitizeDeep(input.citations),
     });
 
     if (error) {
@@ -252,7 +284,6 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
     return { id: String(data) };
   }
 
-  /** Returns last 5 turns (10 messages max if alternating user/assistant). */
   async getChatHistory(sessionId: string): Promise<ChatMessageRow[]> {
     const { data, error } = await this.supabase.schema('public').rpc('prag_get_chat_history', {
       p_tenant_id: TENANT_ID,
@@ -282,20 +313,28 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
   }
 
   async insertDocument(input: DocumentInsert): Promise<{ id: string }> {
-    const sanitizedMetadata = sanitizeDeep(input.metadata ?? {});
+    const { data, error } = await this.supabase.schema('public').rpc('prag_insert_document', {
+      p_tenant_id: TENANT_ID,
+      p_title: sanitizeDbText(input.title),
+      p_content: sanitizeDbText(input.content),
+      p_metadata: sanitizeDeep(input.metadata ?? {}),
+      p_file_path: input.file_path ? sanitizeDbText(input.file_path) : null,
+      p_source_type: input.source_type ?? 'upload',
+    });
 
-  const { data, error } = await this.supabase.rpc('prag_insert_document', {
-    p_tenant_id: TENANT_ID,
-    p_title: input.title,
-    p_content: sanitizeDbText(input.content), // Also clean the content
-    p_metadata: sanitizedMetadata,            // Now the linter sees it as 'used'
-    p_file_path: input.file_path ?? null,
-    p_source_type: input.source_type ?? 'upload',
-  });
     if (error) {
-      console.error("Supabase Error Details:", error);
-      throw new AppError('Doc insert failed', { code: 'supabase_error', status: 500, details: { message: error.message, details: error.details, hint: error.hint} });
+      console.error('Supabase Error Details:', error);
+      throw new AppError('Doc insert failed', {
+        code: 'supabase_error',
+        status: 500,
+        details: {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        },
+      });
     }
+
     return { id: String(data) };
   }
 
@@ -329,7 +368,7 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
           tenant_id: TENANT_ID,
           chunk_id: v.chunk_id,
           embedding: v.embedding,
-        }))
+        })),
       );
 
     if (error) {
@@ -341,7 +380,6 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
     }
   }
 
-  // Backward compatibility
   async insertChunk(input: ChunkInsert): Promise<{ id: string }> {
     const results = await this.batchInsertChunks([input]);
     return { id: results[0].id };
@@ -352,28 +390,53 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
     return { id: input.chunk_id };
   }
 
-  async similaritySearch(input: { embedding: number[]; topK?: number }): Promise<SimilarChunk[]> {
-    const { data, error } = await this.supabase.rpc('prag_match_chunks', {
-      p_tenant_id: TENANT_ID,
-      p_query_embedding: input.embedding,
-      p_match_count: input.topK ?? 5,
-    });
+ async similaritySearch(input: {
+  embedding: number[];
+  topK?: number;
+  sessionId?: string | null;
+  documentIds?: string[];
+}): Promise<SimilarChunk[]> {
+  const { data, error } = await this.supabase.rpc('prag_match_chunks', {
+    p_tenant_id: TENANT_ID,
+    p_query_embedding: input.embedding,
+    p_match_count: input.topK ?? 5,
+  });
 
-    if (error) throw new AppError('Search failed', { code: 'supabase_error', status: 500 });
-
-    const rows = (data ?? []) as Array<Record<string, unknown>>;
-    return rows.map((row) => ({
-      chunk_id: String(row.chunk_id),
-      document_id: String(row.document_id),
-      document_title: String(row.document_title ?? 'Unknown'),
-      chunk_index: Number(row.chunk_index),
-      chunk_text: String(row.chunk_text),
-      chunk_metadata: (row.chunk_metadata as Record<string, unknown>) ?? {},
-      parent_chunk_id: row.parent_chunk_id ? String(row.parent_chunk_id) : null,
-      parent_text: typeof row.parent_text === 'string' ? row.parent_text : null,
-      page_number: typeof row.page_number === 'number' ? row.page_number : null,
-      is_child: typeof row.is_child === 'boolean' ? row.is_child : undefined,
-      score: Number(row.score),
-    }));
+  if (error) {
+    throw new AppError('Search failed', { code: 'supabase_error', status: 500 });
   }
+
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const allowedDocumentIds = input.documentIds?.length ? new Set(input.documentIds) : null;
+  const sessionId = input.sessionId?.trim() || null;
+
+  const mapped = rows.map((row) => ({
+    chunk_id: String(row.chunk_id),
+    document_id: String(row.document_id),
+    document_title: String(row.document_title ?? 'Unknown'),
+    chunk_index: Number(row.chunk_index),
+    chunk_text: String(row.chunk_text),
+    chunk_metadata: (row.chunk_metadata as Record<string, unknown>) ?? {},
+    parent_chunk_id: row.parent_chunk_id ? String(row.parent_chunk_id) : null,
+    parent_text: typeof row.parent_text === 'string' ? row.parent_text : null,
+    page_number: typeof row.page_number === 'number' ? row.page_number : null,
+    is_child: typeof row.is_child === 'boolean' ? row.is_child : undefined,
+    score: Number(row.score),
+  }));
+
+  const byDocument = allowedDocumentIds
+    ? mapped.filter((row) => allowedDocumentIds.has(row.document_id))
+    : mapped;
+
+  if (!sessionId) {
+    return byDocument;
+  }
+
+  const bySession = byDocument.filter((row) => {
+    const raw = row.chunk_metadata.session_id ?? row.chunk_metadata.sessionId ?? row.chunk_metadata.session;
+    return typeof raw === 'string' && raw.trim() === sessionId;
+  });
+
+  return bySession.length > 0 ? bySession : byDocument;
+}
 }

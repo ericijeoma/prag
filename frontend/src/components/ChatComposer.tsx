@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ingestFile } from '../lib/ingest';
+import * as Sentry from '@sentry/react';
+import { createTraceId } from '../lib/trace';
 import { getSessionId } from '../lib/session';
+
+const INGEST_ENDPOINT = 'https://prag.ericijeoma7767.workers.dev/ingest';
 
 export type UploadState = 'idle' | 'uploading' | 'success' | 'error';
 
@@ -10,14 +13,106 @@ export type UploadItem = {
   state: UploadState;
   traceId?: string;
   error?: string;
+  documentId?: string;
 };
+
+type IngestEnvelopeOk = {
+  ok: true;
+  queued?: boolean;
+  document_id?: string;
+  result?: {
+    document_id?: string;
+  };
+};
+
+type IngestEnvelopeErr = {
+  ok: false;
+  error?: {
+    code?: string;
+    message?: string;
+    details?: unknown;
+  };
+};
+
+type IngestEnvelope = IngestEnvelopeOk | IngestEnvelopeErr;
+
+type UploadOutcome =
+  | { ok: true; traceId: string; queued: boolean; documentId?: string }
+  | { ok: false; traceId: string; message: string };
+
+async function uploadFile(file: File, session_id?: string | null): Promise<UploadOutcome> {
+  const traceId = createTraceId();
+
+  try {
+    const metadata = JSON.stringify({
+      uploaded_from: 'frontend',
+      filename: file.name,
+      mime: file.type,
+      size: file.size,
+    });
+
+    const res = await fetch(INGEST_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'x-trace-id': traceId,
+        ...(session_id ? { 'x-session-id': session_id } : {}),
+        'x-file-name': encodeURIComponent(file.name),
+        'x-file-metadata': encodeURIComponent(metadata),
+        'content-type': file.type || 'application/octet-stream',
+      },
+      body: file,
+    });
+
+    let envelope: IngestEnvelope;
+    try {
+      envelope = (await res.json()) as IngestEnvelope;
+    } catch {
+      envelope = { ok: false, error: { message: 'Invalid JSON response from server.' } };
+    }
+
+    Sentry.addBreadcrumb({
+      category: 'fetch',
+      message: 'POST /ingest',
+      level: res.ok && envelope.ok ? 'info' : 'error',
+      data: {
+        filename: file.name,
+        size: file.size,
+        status: res.status,
+        traceId,
+      },
+    });
+
+    if (!res.ok || envelope.ok === false) {
+      const message =
+        envelope.ok === false
+          ? (envelope.error?.message ?? 'Ingest failed')
+          : 'Ingest failed';
+
+      return { ok: false, traceId, message };
+    }
+
+    const documentId =
+      envelope.document_id ??
+      envelope.result?.document_id;
+
+    return {
+      ok: true,
+      traceId,
+      queued: res.status === 202,
+      documentId,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Network error';
+    Sentry.captureException(err);
+    return { ok: false, traceId, message };
+  }
+}
 
 export function ChatComposer({
   disabled,
   onSend,
 }: {
   disabled?: boolean;
-  // UPDATE: The signature now passes the attachments array up
   onSend: (text: string, attachments: UploadItem[]) => void | Promise<void>;
 }) {
   const [text, setText] = useState('');
@@ -33,15 +128,13 @@ export function ChatComposer({
 
   async function submit() {
     const msg = text.trim();
-    // Only pass along files that actually finished uploading
-    const readyUploads = uploads.filter(u => u.state === 'success');
-    
+    const readyUploads = uploads.filter((u) => u.state === 'success');
+
     if (!msg && readyUploads.length === 0) return;
-    
-    // UPDATE: Clear the text AND the staging area immediately upon send
+
     setText('');
-    setUploads([]); 
-    
+    setUploads([]);
+
     await onSend(msg, readyUploads);
   }
 
@@ -67,14 +160,25 @@ export function ChatComposer({
 
     await Promise.all(
       newItems.map(async (item) => {
-        const result = await ingestFile(item.file, { session_id });
+        const result = await uploadFile(item.file, session_id);
+
         setUploads((prev) =>
           prev.map((u) =>
             u.id !== item.id
               ? u
               : result.ok
-                ? { ...u, state: 'success', traceId: result.traceId }
-                : { ...u, state: 'error', traceId: result.traceId, error: result.message },
+                ? {
+                    ...u,
+                    state: 'success',
+                    traceId: result.traceId,
+                    documentId: result.documentId,
+                  }
+                : {
+                    ...u,
+                    state: 'error',
+                    traceId: result.traceId,
+                    error: result.message,
+                  },
           ),
         );
       }),
@@ -118,11 +222,11 @@ export function ChatComposer({
           className="w-full resize-none rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-600"
           disabled={disabled}
         />
+
         <button
           type="button"
           onClick={() => void submit()}
-          // UPDATE: Allow sending if there's no text, but files are uploaded
-          disabled={disabled || (text.trim().length === 0 && uploads.filter(u => u.state === 'success').length === 0)}
+          disabled={disabled || (text.trim().length === 0 && uploads.filter((u) => u.state === 'success').length === 0)}
           className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Send
