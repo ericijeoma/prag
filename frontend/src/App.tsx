@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Sentry from '@sentry/react';
 import type { AnswerResult } from './lib/contracts';
 import { loadHistory, saveHistory, clearHistory, type HistoryTurn } from './lib/history';
@@ -230,6 +230,12 @@ export default function App() {
 		setComposerResetSignal((n) => n + 1);
 	}
 
+	const handleActiveDocumentIdsChange = useCallback((ids: string[]) => {
+  if (ids.length > 0) {
+    setActiveDocumentIds((prev) => Array.from(new Set([...prev, ...ids])));
+  }
+}, []);
+
 	return (
 		<div className="min-h-screen bg-slate-950 text-slate-100">
 			<div className="flex h-screen">
@@ -265,7 +271,7 @@ export default function App() {
 						</div>
 					</div>
 
-					<ChatComposer key={composerResetSignal} disabled={busy} onSend={send} onActiveDocumentIdsChange={setActiveDocumentIds} />
+					<ChatComposer key={composerResetSignal} disabled={busy} onSend={send} onActiveDocumentIdsChange={handleActiveDocumentIdsChange} />
 				</main>
 			</div>
 		</div>
