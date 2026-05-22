@@ -100,6 +100,7 @@ export class SearchService {
   }
 
   async search(input: SearchRequest): Promise<SearchResult> {
+    console.log('DEBUG: SearchService received documentIds:', input.documentIds);
     if (!input.query?.trim()) {
       throw new AppError('query is required', { code: 'bad_request', status: 400 });
     }
@@ -113,6 +114,8 @@ export class SearchService {
     });
 
     const embedding = await this.embed(rewrittenQuery);
+
+    console.log('DEBUG: Calling similaritySearch with documentIds:', input.documentIds);
     const rawResults = await this.repo.similaritySearch({
       embedding,
       topK: fetchK,

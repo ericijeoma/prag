@@ -29,5 +29,5 @@ export type ChatRequest = {
   // backend expects `query` + optional `session_id`
   query: string;
   session_id?: string;
-  document_ids?: string[];
+  documentIds?: string[];
 };

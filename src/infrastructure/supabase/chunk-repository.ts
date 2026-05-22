@@ -320,6 +320,7 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
       p_metadata: sanitizeDeep(input.metadata ?? {}),
       p_file_path: input.file_path ? sanitizeDbText(input.file_path) : null,
       p_source_type: input.source_type ?? 'upload',
+      p_id: input.id ?? null,
     });
 
     if (error) {
@@ -400,6 +401,7 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
     p_tenant_id: TENANT_ID,
     p_query_embedding: input.embedding,
     p_match_count: input.topK ?? 5,
+    p_document_ids: input.documentIds && input.documentIds.length > 0 ? input.documentIds : null,
   });
 
   if (error) {
@@ -409,6 +411,9 @@ export class ChunkRepository implements TracePort, ChatMemoryPort {
   const rows = (data ?? []) as Array<Record<string, unknown>>;
   const allowedDocumentIds = input.documentIds?.length ? new Set(input.documentIds) : null;
   const sessionId = input.sessionId?.trim() || null;
+  // ADD THIS LOG:
+console.log("DEBUG: Repository received IDs:", input.documentIds);
+console.log("DEBUG: First row document_id from DB:", rows[0]?.document_id);
 
   const mapped = rows.map((row) => ({
     chunk_id: String(row.chunk_id),

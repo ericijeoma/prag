@@ -212,6 +212,7 @@ async function processQueue(batch: MessageBatch<unknown>, env: WorkerEnv): Promi
         file_path: fileName,
         source_type: ext,
         trace_id: traceId,
+        document_id: job.documentId,
       });
 
       await env.TEMP_FILES.delete(kvKey);

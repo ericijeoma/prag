@@ -13,6 +13,7 @@ export type IngestRequest = {
   file_path?: string | null;
   source_type?: string;
   trace_id?: string;
+  document_id?: string;
 };
 export type IngestResult = { documentId: string; chunksInserted: number; traceId: string };
 
@@ -82,6 +83,7 @@ export class IngestService {
       // 1. Insert Document
       const normalizedContent = this.normalizeText(input.content);
       const { id: documentId } = await this.repo.insertDocument({
+        id: input.document_id,
         title: input.title,
         content: normalizedContent,
         metadata: { ...(input.metadata ?? {}), traceId },

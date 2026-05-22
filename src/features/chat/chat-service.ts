@@ -5,79 +5,70 @@ import type { ChatTurn } from '../../shared/types/chat.js';
 import { AppError } from '../../shared/http/errors.js';
 
 type StoredChatMessage = {
-    role: ChatTurn['role'];
-    content: string;
+	role: ChatTurn['role'];
+	content: string;
 };
 
 export type ChatRequest = {
-    query: string;
-    traceId: string;
-    sessionId?: string | null;
-    documentIds?:string[]
+	query: string;
+	traceId: string;
+	sessionId?: string | null;
+	documentIds?: string[];
 };
 
 export type ChatResponse = {
-    session_id: string;
-    traceId: string;
-    result: AnswerResult;
+	session_id: string;
+	traceId: string;
+	result: AnswerResult;
 };
 
 export class ChatService {
-    constructor(
-        private readonly deps: {
-            answer: AnswerService;
-            memory: ChatMemoryPort;
-        },
-    ) {}
+	constructor(
+		private readonly deps: {
+			answer: AnswerService;
+			memory: ChatMemoryPort;
+		},
+	) {}
 
-    async chat(input: ChatRequest): Promise<ChatResponse> {
-        if (!input.query?.trim()) {
-            throw new AppError('query is required', { code: 'bad_request', status: 400 });
-        }
+	async chat(input: ChatRequest): Promise<ChatResponse> {
+		if (!input.query?.trim()) {
+			throw new AppError('query is required', { code: 'bad_request', status: 400 });
+		}
 
-        if (!input.traceId?.trim()) {
-            throw new AppError('traceId is required', { code: 'bad_request', status: 400 });
-        }
+		if (!input.traceId?.trim()) {
+			throw new AppError('traceId is required', { code: 'bad_request', status: 400 });
+		}
 
-        let session_id = input.sessionId?.trim() || null;
+		let session_id = input.sessionId?.trim() || null;
 
-        if (!session_id) {
-            const created = await this.deps.memory.createChatSession({
-                traceId: input.traceId,
-            });
-            session_id = created.id;
-        }
+		if (!session_id) {
+			const created = await this.deps.memory.createChatSession({
+				traceId: input.traceId,
+			});
+			session_id = created.id;
+		}
 
-        // FIXED: Declared variable without a redundant initial value to prevent "unused statement" warning
-        let history: StoredChatMessage[];
+		const history = (await this.deps.memory.getChatHistory(session_id)) as StoredChatMessage[];
+		const chatHistory: ChatTurn[] = history
+			.slice()
+			.reverse()
+			.map((message) => ({
+				role: message.role,
+				content: message.content,
+			}));
 
-        try {
-            history = (await this.deps.memory.getChatHistory(session_id)) as StoredChatMessage[];
-        } catch {
-            // FIXED: Removed the unused 'err' identifier completely using an optional catch binding
-            history = [];
-        }
+		const result = await this.deps.answer.answer({
+			query: input.query,
+			traceId: input.traceId,
+			sessionId: session_id,
+			chatHistory,
+			documentIds: input.documentIds ?? [],
+		});
 
-        const chatHistory: ChatTurn[] = history
-            .slice()
-            .reverse()
-            .map((message) => ({
-                role: message.role,
-                content: message.content,
-            }));
-
-        const result = await this.deps.answer.answer({
-            query: input.query,
-            traceId: input.traceId,
-            sessionId: session_id,
-            chatHistory,
-            documentIds: input.documentIds
-        });
-
-        return {
-            session_id,
-            traceId: input.traceId,
-            result,
-        };
-    }
+		return {
+			session_id,
+			traceId: input.traceId,
+			result,
+		};
+	}
 }

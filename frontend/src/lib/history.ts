@@ -1,10 +1,16 @@
+import type { Citation } from './contracts';
+
+
 export type HistoryTurn = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
-};
-
+  verified?: boolean;
+  degraded?: boolean;
+  citations?: Citation[];
+  attachments?: { id: string; name: string }[];
+}
 const HISTORY_KEY = 'chat_history';
 
 export function loadHistory(): HistoryTurn[] {

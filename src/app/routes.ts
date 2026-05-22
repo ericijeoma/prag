@@ -35,7 +35,7 @@ export type AppEnv = SupabaseEnv & {
 type ChatRequestBody = {
   query?: string
   session_id?: string,
-  document_ids?: string[]
+  documentIds?: string[]
 }
 
 const SUPPORTED_EXTENSIONS = ['pdf', 'docx', 'txt', 'md'] as const
@@ -345,7 +345,8 @@ if (path === '/ingest') {
       const sessionId = body.session_id?.trim() || sessionIdFromHeader
       
       // Extract scope parameters from payload
-      const documentIds = body.document_ids ?? []
+      const documentIds = body.documentIds ?? []
+      console.log("DEBUG: Backend received these IDs:", documentIds);
 
       const searchSvc = new SearchService({ supabase: supabase!, env })
       const answerSvc = new AnswerService({
