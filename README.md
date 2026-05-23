@@ -324,7 +324,7 @@ pnpm wrangler secret put SENTRY_WORKER_DSN
 ### 4) Run the Worker locally
 
 ```bash
-pnpm dev
+pnpm wrangler dev
 ```
 
 Local URLs (default wrangler):
@@ -357,7 +357,7 @@ pnpm test
 ### Backend (Cloudflare Worker)
 
 ```bash
-pnpm deploy
+pnpm wrangler deploy
 ```
 
 Wrangler config is in `wrangler.jsonc` and includes:
