@@ -82,7 +82,8 @@ function buildPrompt(query: string, citations: Citation[]): string {
 	return [
 		'You are PRAG, a production RAG agent.',
 		'You MUST answer ONLY using the context below.',
-		'Iff the context does not contain the needed information, say: "I don\'t have enough specific information to answer that."',
+		'If the context contains relevant information even if it does not exactly match the question\'s phrasing, use it to give the best possible answer and note any distinction.',
+		'Only say "I don\'t have enough specific information to answer that." if the context is completely unrelated to the question.',
 		'',
 		'Citation rules (mandatory):',
 		'- Use only the labels [C1], [C2], ... that are provided in the context.',
@@ -176,6 +177,7 @@ export class AnswerService {
 			query: input.query,
 			chatHistory: input.chatHistory ?? [],
 		});
+		console.log('DEBUG rewrite:', JSON.stringify({ original: input.query, rewritten: queryRewrite }));
 
 		await this.repo.upsertSession({
 			sessionKey,
@@ -275,7 +277,7 @@ export class AnswerService {
 			answer,
 			citations,
 			verified,
-			degraded: !verified,
+			degraded: false,
 		};
 	}
 

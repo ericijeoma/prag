@@ -154,7 +154,14 @@ export default function App() {
 
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [activeDocumentIds, setActiveDocumentIds] = useState<string[]>([]);
+	const [activeDocumentIds, setActiveDocumentIds] = useState<string[]>(() => {
+  try {
+    const stored = localStorage.getItem('active_document_ids');
+    return stored ? (JSON.parse(stored) as string[]) : [];
+  } catch {
+    return [];
+  }
+});
 	const [composerResetSignal, setComposerResetSignal] = useState(0);
 	const scrollerRef = useRef<HTMLDivElement | null>(null);
 
@@ -224,15 +231,20 @@ export default function App() {
 	}
 
 	function newSession() {
-		clearSessionId();
-		clearAllHistory();
-		setActiveDocumentIds([]);
-		setComposerResetSignal((n) => n + 1);
-	}
+  clearSessionId();
+  clearAllHistory();
+  localStorage.removeItem('active_document_ids');
+  setActiveDocumentIds([]);
+  setComposerResetSignal((n) => n + 1);
+}
 
 	const handleActiveDocumentIdsChange = useCallback((ids: string[]) => {
   if (ids.length > 0) {
-    setActiveDocumentIds((prev) => Array.from(new Set([...prev, ...ids])));
+    setActiveDocumentIds((prev) => {
+      const next = Array.from(new Set([...prev, ...ids]));
+      localStorage.setItem('active_document_ids', JSON.stringify(next));
+      return next;
+    });
   }
 }, []);
 
