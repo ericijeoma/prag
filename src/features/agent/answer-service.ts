@@ -37,7 +37,7 @@ export type AnswerResult = {
 };
 
 const GROQ_MODEL = 'openai/gpt-oss-120b';
-const FAITHFULNESS_MODEL = '@cf/meta/llama-3-8b-instruct';
+const FAITHFULNESS_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
 const REWRITE_HISTORY_LIMIT = 8;
 const MAX_CITATION_TEXT = 1600;
 

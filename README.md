@@ -74,7 +74,7 @@ sequenceDiagram
   participant Groq as Groq LLM
 
   Client->>Worker: POST /chat { query, session_id?, document_ids? }
-  Worker->>AI: (optional) rewrite query (llama-3-8b-instruct)
+  Worker->>AI: (optional) rewrite query (llama-3.1-8b-instruct-fast)
   Worker->>AI: embed query (bge-small-en-v1.5)
   Worker->>DB: RPC prag_match_chunks(embedding)
   DB-->>Worker: similar chunks + metadata

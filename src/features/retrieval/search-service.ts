@@ -25,7 +25,7 @@ export type SearchResult = {
 };
 
 const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
-const REWRITE_MODEL = '@cf/meta/llama-3-8b-instruct';
+const REWRITE_MODEL = '@cf/meta/llama-3.1-8b-instruct-fast';
 
 const MIN_SCORE = 0.45;
 export const RAG_V3_MIN_SCORE = 0.45;
